@@ -1,7 +1,6 @@
 import os
 import json
-import asyncio
-from typing import TypedDict, Annotated, List, Optional
+from typing import TypedDict, List, Optional
 from dotenv import load_dotenv
 
 from fastapi import FastAPI, HTTPException
@@ -39,12 +38,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── LangGraph State ───────────────────────────────────────────────────────────
+# ── State ─────────────────────────────────────────────────────────────────────
 class AgentState(TypedDict):
     user_id: str
     user_message: str
     messages: List[dict]
-
     profile: Optional[dict]
     applied_jobs: Optional[List[dict]]
     rejected_jobs: Optional[List[dict]]
@@ -52,14 +50,11 @@ class AgentState(TypedDict):
     recent_interviews: Optional[List[dict]]
     conversation_history: Optional[List[dict]]
     resume: Optional[dict]
-
     experience_tier: Optional[str]
     skills_gap: Optional[List[str]]
     detected_intent: Optional[str]
     career_context: Optional[str]
-    final_response: Optional[str]
 
-# ── Request Model ─────────────────────────────────────────────────────────────
 class ChatRequest(BaseModel):
     user_id: str
     messages: List[dict]
@@ -69,25 +64,18 @@ class ChatRequest(BaseModel):
 # ═══════════════════════════════════════════════════════════════════════════════
 async def retrieve_profile(state: AgentState) -> AgentState:
     user_id = state["user_id"]
-
     try:
-        profile_res = supabase.from_("profiles") \
-            .select("*").eq("user_id", user_id).single().execute()
-        state["profile"] = profile_res.data or {}
+        res = supabase.from_("profiles").select("*").eq("user_id", user_id).single().execute()
+        state["profile"] = res.data or {}
     except:
         state["profile"] = {}
-
     try:
-        resume_res = supabase.from_("resumes") \
-            .select("tailored_json, created_at") \
-            .eq("user_id", user_id) \
-            .order("created_at", desc=True) \
-            .limit(1).execute()
-        state["resume"] = resume_res.data[0] if resume_res.data else None
+        res = supabase.from_("resumes").select("tailored_json, created_at") \
+            .eq("user_id", user_id).order("created_at", desc=True).limit(1).execute()
+        state["resume"] = res.data[0] if res.data else None
     except:
         state["resume"] = None
-
-    print(f"[node:retrieve_profile] done — {state['profile'].get('full_name', 'unknown')}")
+    print(f"[node:retrieve_profile] {state['profile'].get('full_name', 'unknown')}")
     return state
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -95,50 +83,37 @@ async def retrieve_profile(state: AgentState) -> AgentState:
 # ═══════════════════════════════════════════════════════════════════════════════
 async def analyze_history(state: AgentState) -> AgentState:
     user_id = state["user_id"]
-
     try:
-        applied_res = supabase.from_("jobs") \
-            .select("company, role, score, score_reason, score_breakdown, found_at, description") \
+        res = supabase.from_("jobs").select("company, role, score, score_reason, score_breakdown") \
             .eq("user_id", user_id).eq("status", "approved") \
             .order("found_at", desc=True).limit(10).execute()
-        state["applied_jobs"] = applied_res.data or []
+        state["applied_jobs"] = res.data or []
     except:
         state["applied_jobs"] = []
-
     try:
-        rejected_res = supabase.from_("jobs") \
-            .select("company, role, score") \
+        res = supabase.from_("jobs").select("company, role, score") \
             .eq("user_id", user_id).eq("status", "rejected") \
             .order("found_at", desc=True).limit(10).execute()
-        state["rejected_jobs"] = rejected_res.data or []
+        state["rejected_jobs"] = res.data or []
     except:
         state["rejected_jobs"] = []
-
     try:
-        pending_res = supabase.from_("jobs") \
-            .select("company, role, score, location") \
-            .eq("user_id", user_id).eq("status", "pending") \
-            .gte("score", 7) \
+        res = supabase.from_("jobs").select("company, role, score, location") \
+            .eq("user_id", user_id).eq("status", "pending").gte("score", 7) \
             .order("score", desc=True).limit(5).execute()
-        state["pending_jobs"] = pending_res.data or []
+        state["pending_jobs"] = res.data or []
     except:
         state["pending_jobs"] = []
-
     try:
-        interview_res = supabase.from_("interview_sessions") \
-            .select("interview_type, messages, created_at") \
-            .eq("user_id", user_id) \
-            .order("created_at", desc=True).limit(5).execute()
-        state["recent_interviews"] = interview_res.data or []
+        res = supabase.from_("interview_sessions").select("interview_type, created_at") \
+            .eq("user_id", user_id).order("created_at", desc=True).limit(5).execute()
+        state["recent_interviews"] = res.data or []
     except:
         state["recent_interviews"] = []
-
     try:
-        history_res = supabase.from_("coach_conversations") \
-            .select("role, content") \
-            .eq("user_id", user_id) \
-            .order("created_at", desc=True).limit(20).execute()
-        state["conversation_history"] = list(reversed(history_res.data or []))
+        res = supabase.from_("coach_conversations").select("role, content") \
+            .eq("user_id", user_id).order("created_at", desc=True).limit(20).execute()
+        state["conversation_history"] = list(reversed(res.data or []))
     except:
         state["conversation_history"] = []
 
@@ -150,12 +125,9 @@ async def analyze_history(state: AgentState) -> AgentState:
                 all_missing.extend(bd.get("missing_skills", []))
             except:
                 pass
-
     from collections import Counter
-    skill_counts = Counter(all_missing)
-    state["skills_gap"] = [skill for skill, _ in skill_counts.most_common(10)]
-
-    print(f"[node:analyze_history] applied={len(state['applied_jobs'])} rejected={len(state['rejected_jobs'])} pending={len(state['pending_jobs'])}")
+    state["skills_gap"] = [s for s, _ in Counter(all_missing).most_common(10)]
+    print(f"[node:analyze_history] applied={len(state['applied_jobs'])} pending={len(state['pending_jobs'])}")
     return state
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -173,7 +145,6 @@ async def career_reasoning(state: AgentState) -> AgentState:
         tier = "mid-level (3-5 years)"
     else:
         tier = "senior (5+ years)"
-
     state["experience_tier"] = tier
 
     msg = state["user_message"].lower()
@@ -187,70 +158,60 @@ async def career_reasoning(state: AgentState) -> AgentState:
         intent = "learning_path"
     elif any(w in msg for w in ["salary", "negotiate", "offer", "compensation"]):
         intent = "salary_negotiation"
-    elif any(w in msg for w in ["reject", "ghosted", "no response", "not hearing"]):
+    elif any(w in msg for w in ["reject", "ghosted", "no response"]):
         intent = "rejection_support"
-    elif any(w in msg for w in ["position", "realistic", "candidate", "angle", "stretch"]):
+    elif any(w in msg for w in ["position", "realistic", "candidate", "angle", "chance", "apply", "stand"]):
         intent = "positioning_strategy"
     else:
         intent = "general_career"
-
     state["detected_intent"] = intent
 
     skills = ", ".join(profile.get("skills", [])) or "Not specified"
     target_roles = ", ".join(profile.get("preferred_titles", [])) or "Not specified"
-    skills_gap = ", ".join(state["skills_gap"]) if state["skills_gap"] else "None identified yet"
+    skills_gap = ", ".join(state["skills_gap"]) if state["skills_gap"] else "None identified"
 
     applied_summary = "\n".join([
-        f"• {j['role']} at {j['company']} — score {j['score']}/10"
+        f"• {j['role']} at {j['company']} — {j['score']}/10"
         for j in state["applied_jobs"]
     ]) or "None yet"
 
-    rejected_summary = "\n".join([
-        f"• {j['role']} at {j['company']}"
-        for j in state["rejected_jobs"]
-    ]) or "None"
-
     pending_summary = "\n".join([
-        f"• {j['role']} at {j['company']} — score {j['score']}/10"
+        f"• {j['role']} at {j['company']} — {j['score']}/10"
         for j in state["pending_jobs"]
     ]) or "None"
 
-    intent_instruction = {
-        "resume_help": "Rewrite their actual bullets now — don't ask if they want you to. Show before/after. Name exactly what was weak and why the new version is stronger.",
-        "cover_letter": "Write the cover letter now. Pick the most relevant job from their applied list and write it. Don't ask for permission.",
-        "interview_prep": "Give 3 hard, specific questions for their exact role and level. Not soft questions. Answer one yourself as a model answer.",
-        "learning_path": f"Top missing skills: {skills_gap}. Give a ruthless 30-day plan. Name specific courses, projects, not vague advice.",
-        "salary_negotiation": "Give exact salary ranges for their role and experience. Tell them word-for-word what to say in the negotiation. No hedging.",
-        "rejection_support": "One sentence acknowledging the frustration. Then diagnose exactly why they're getting rejected using their actual data. Then 3 specific fixes — not generic tips.",
-        "positioning_strategy": "Give a direct verdict — are they a realistic candidate or not. No fence-sitting. Then give the exact positioning angle that maximizes their shot. Name the frame, name the companies to target.",
-        "general_career": "Answer directly using their actual profile. No generic advice. Reference their real skills, companies, scores.",
+    intent_instructions = {
+        "resume_help": "Rewrite their bullets now. Don't ask — just do it. Show BEFORE and AFTER. Name exactly what was weak.",
+        "cover_letter": "Write the full cover letter now. Use their most recent applied job as context.",
+        "interview_prep": "Give 3 hard, role-specific questions at their experience level. Answer one yourself as a model.",
+        "learning_path": f"Their missing skills: {skills_gap}. Give a ruthless 30-day plan with specific resources.",
+        "salary_negotiation": "Give exact salary ranges for their role and level. Tell them word-for-word what to say.",
+        "rejection_support": "One sentence acknowledging it. Then diagnose the real reason using their data. Then 3 specific fixes.",
+        "positioning_strategy": "Give a direct verdict — realistic or not. No hedging. Then give the exact positioning angle. Name the frame. Name specific companies to target.",
+        "general_career": "Answer using their actual data. Reference real skills, companies, scores. No generic advice.",
     }.get(intent, "")
 
     state["career_context"] = f"""
-CANDIDATE PROFILE:
+CANDIDATE:
 Name: {profile.get('full_name', 'User')}
-Experience Level: {tier}
+Level: {tier}
 Skills: {skills}
 Target Roles: {target_roles}
 Work Preference: {profile.get('work_preference', 'remote')}
 Location: {profile.get('location', 'Not specified')}
-Summary: {profile.get('experience_summary', 'Not provided')}
+Background: {profile.get('experience_summary', 'Not provided')}
 
-JOB SEARCH STATUS:
-Applied:
+JOBS APPLIED:
 {applied_summary}
 
-Rejected/Skipped:
-{rejected_summary}
-
-High-Score Pending (not acted on):
+HIGH-SCORE PENDING:
 {pending_summary}
 
 RECURRING SKILLS GAP:
 {skills_gap}
 
-DETECTED INTENT: {intent}
-COACHING INSTRUCTION: {intent_instruction}
+INTENT: {intent}
+INSTRUCTION: {intent_instructions}
 """.strip()
 
     print(f"[node:career_reasoning] tier={tier} intent={intent}")
@@ -261,81 +222,71 @@ COACHING INSTRUCTION: {intent_instruction}
 # ═══════════════════════════════════════════════════════════════════════════════
 async def apply_tooling(state: AgentState) -> AgentState:
     intent = state["detected_intent"]
-
     if intent == "resume_help" and state["resume"]:
-        resume_json = state["resume"].get("tailored_json", {})
-        if resume_json:
-            skills_in_resume = resume_json.get("skills", [])
-            state["career_context"] += f"\n\nCURRENT RESUME SKILLS: {', '.join(skills_in_resume)}"
-
-    if intent == "learning_path" and state["skills_gap"]:
-        state["career_context"] += f"\n\nPRIORITY SKILLS TO LEARN: {', '.join(state['skills_gap'][:5])}"
-
+        try:
+            skills_in_resume = state["resume"].get("tailored_json", {}).get("skills", [])
+            if skills_in_resume:
+                state["career_context"] += f"\n\nRESUME SKILLS: {', '.join(skills_in_resume)}"
+        except:
+            pass
     print(f"[node:apply_tooling] intent={intent}")
     return state
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# System Prompt
+# System Prompt — Tight, Identity-First, Few-Shot
 # ═══════════════════════════════════════════════════════════════════════════════
-SYSTEM_PROMPT = """You are AlgoScout Career Coach — a sharp, no-BS AI career strategist.
-You think like a top recruiter who has reviewed 10,000 profiles.
-You talk like a mentor who respects the user's time and intelligence.
-You never waste words and you never pass the ball.
+SYSTEM_PROMPT = """You are ALGO — AlgoScout's AI career strategist.
+You are the sharp friend who happens to know exactly how hiring works.
+You've seen thousands of resumes, coached people into Google, Anthropic, and YC startups.
+You do not perform helpfulness. You deliver results.
 
 {career_context}
 
-═══ YOUR RULES ═══
+━━━ YOUR OPERATING PRINCIPLES ━━━
 
-1. BRUTAL HONESTY
-   If they're not a realistic candidate, say it plainly.
-   Never say "you may face challenges" or "it's not impossible."
-   Say: "Honestly, you're not there yet for pure research roles — here's exactly why and the fastest path to fix it."
+① ONLY USE WHAT'S IN THEIR PROFILE
+Never mention skills, tools, or companies not in their actual data.
+Hallucinating PyTorch when they never listed it destroys trust instantly.
 
-2. ZERO CORPORATE SPEAK
-   Banned phrases: "Key Changes:", "Next Action:", "It's worth noting", "certainly", "it's important to",
-   "Would you like me to help?", "Let me know if you need anything.", "I hope this helps."
-   You own the solution. Always.
+② DELIVER FIRST, FOLLOW UP SECOND
+Always give the output (verdict, rewrite, plan) before anything else.
+End with one tightly scoped follow-up that extends what you just did.
+Never end with "Would you like help with that?" or "Let me know."
 
-3. SHORT AND DENSE
-   Max 3 paragraphs unless they explicitly asked for a long output (rewrite, full plan, cover letter).
-   Every sentence must earn its place or it gets cut.
+③ VERDICT OVER HEDGING
+When asked if they should apply or how to position: give a verdict.
+"Yes — apply via the production angle, not the research angle. Here's why."
+Not: "You may face some challenges but it's not impossible."
 
-4. ACT FIRST, THEN OFFER ONE SPECIFIC FOLLOW-UP
-   Always deliver the output first — the rewrite, the verdict, the plan.
-   Then end with ONE tightly scoped follow-up offer. Not generic. Tied to what you just did.
-   
-   Examples:
-   - "Want me to make this positioning more aggressive or pull it back?"
-   - "Want me to rewrite the other 2 bullets in the same style?"
-   - "Want me to generate the cover letter for this same role?"
-   - "Want me to turn this into a 30-day execution plan?"
-   
-   Never: "Let me know if you need anything." 
-   Never: "Would you like me to help with something else?"
-   The follow-up must be a direct extension of what you just delivered.
+④ ONLY THEIR DATA
+Every insight must trace back to their actual skills, scores, or job history.
+If you don't have enough data to be specific, say so and ask for it.
 
-5. USE THEIR REAL DATA
-   Reference actual companies they applied to, their actual scores, their actual skills.
-   If their score at a company was low — say why. If they have a skills gap — name it.
-   Generic advice is a coaching failure.
+━━━ FEW-SHOT EXAMPLES ━━━
 
-6. POSITIONING VERDICTS
-   When asked if they're a realistic candidate: give a direct verdict.
-   "Yes, but only via the production angle — the research angle won't land at your level."
-   Then give the exact positioning frame. Name it. Don't describe it vaguely.
+— EXAMPLE 1: Positioning verdict —
+User: "Should I apply to this AI research role? I have 2 years freelancing, no big company name."
+ALGO: "Yes — but you're not a research candidate, you're a production candidate who thinks like a researcher. That's actually rarer and more valuable at a company like Featherless AI which ships models, not just publishes papers. Lead with your LangGraph and RAG pipeline work. Frame it as: 'I've deployed the architectures researchers theorize about.' Skip the research angle entirely — it'll sound forced at 2 years. Apply today. Want me to write the positioning line for your cover letter?"
 
-7. EMOTIONAL INTELLIGENCE
-   If they're frustrated: one sentence acknowledging it, then immediately to strategy.
-   Don't dwell. Don't over-empathize. They came for strategy, not therapy.
+— EXAMPLE 2: Resume rewrite —
+User: "Rewrite my resume bullet for my RAG pipeline work."
+ALGO:
+**Before:** "Built RAG pipelines for clients using LangChain and Python."
+**After:** "Designed and deployed production RAG pipelines handling 10K+ queries/day for 3 clients — reducing hallucination rate by 40% through hybrid retrieval and reranking."
+The before is a task description. The after is an outcome with scale and method. Want me to rewrite the next bullet in the same style?
 
-8. TOPIC BOUNDARY
-   Career topics only. For anything else: "I only handle career strategy. Try Claude.ai for that 😊"
+— EXAMPLE 3: Honest rejection diagnosis —
+User: "I've applied to 15 ML roles and heard nothing back."
+ALGO: "Your score breakdown across applied jobs shows a recurring skills gap in MLOps and model evaluation — two things every ML team screens for in the first resume pass. You're getting filtered before a human sees your name. Fix: add one project to your GitHub this week that shows model evaluation (confusion matrix, precision/recall analysis, deployment). That closes the gap that's killing you silently. Want me to spec out exactly what that project should look like?"
 
-TONE: Confident. Direct. Warm but not soft. Sharp but not cold.
-FORMAT: Use markdown only when it genuinely helps structure (e.g. before/after bullets, a plan). Never use it decoratively."""
+━━━ FORMAT ━━━
+3 paragraphs max unless they asked for a full rewrite or plan.
+Markdown only when it genuinely structures the output (before/after, steps).
+No headers like "Strengths:", "Next Action:", "Assessment:".
+Write like a sharp person talking, not a consultant delivering a report."""
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# API Endpoints
+# API
 # ═══════════════════════════════════════════════════════════════════════════════
 @app.get("/")
 async def root():
@@ -372,7 +323,6 @@ async def chat(req: ChatRequest):
             "skills_gap": None,
             "detected_intent": None,
             "career_context": None,
-            "final_response": None,
         }
 
         state = await retrieve_profile(state)
@@ -380,9 +330,7 @@ async def chat(req: ChatRequest):
         state = await career_reasoning(state)
         state = await apply_tooling(state)
 
-        system_prompt = SYSTEM_PROMPT.format(
-            career_context=state["career_context"]
-        )
+        system_prompt = SYSTEM_PROMPT.format(career_context=state["career_context"])
 
         lc_messages = [SystemMessage(content=system_prompt)]
 
@@ -424,10 +372,7 @@ async def chat(req: ChatRequest):
     return StreamingResponse(
         stream_response(),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 if __name__ == "__main__":
