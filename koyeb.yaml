@@ -1,0 +1,22 @@
+services:
+  - name: algoscout-agent
+    type: web
+    git:
+      branch: main
+    build:
+      buildpack: python
+    run:
+      command: uvicorn main:app --host 0.0.0.0 --port 8000
+    ports:
+      - port: 8000
+        protocol: http
+    env:
+      - key: GROQ_API_KEY
+        value: ""
+      - key: SUPABASE_URL
+        value: ""
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        value: ""
+    health_checks:
+      - path: /health
+        port: 8000
