@@ -608,6 +608,356 @@ async def chat(req: ChatRequest):
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
+
+    # ═══════════════════════════════════════════════════════════════════════════════
+# ALGOSCOUT — INTERVIEW GRAPH
+# Add this to main.py (paste before the `if __name__ == "__main__":` line)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+import json
+from typing import TypedDict, List, Optional
+
+# ── Interview State ───────────────────────────────────────────────────────────
+class InterviewState(TypedDict):
+    user_id: str
+    session_id: str
+    job_id: str
+    user_message: str
+    messages: List[dict]
+    profile: Optional[dict]
+    job: Optional[dict]
+    resume: Optional[dict]
+    question_count: int
+    duration_minutes: int
+    elapsed_seconds: int
+    running_score: float
+    skills_gap: Optional[List[str]]
+    last_question_topic: Optional[str]
+    difficulty: str               # "easy" | "medium" | "hard"
+    interview_context: Optional[str]
+    final_response: Optional[str]
+
+# ── Interview System Prompt ───────────────────────────────────────────────────
+INTERVIEW_IDENTITY = """You are a senior technical interviewer at {company}.
+You are interviewing {name} for the {role} position.
+You are sharp, professional, and direct. Not warm — not cold. Like a real interviewer.
+
+RULES:
+- Ask ONE question at a time. Never two.
+- Reference their resume or previous answers when probing.
+- If the answer is weak: probe deeper — "Can you give a specific example?"
+- If the answer is strong: pivot to a harder topic.
+- Never give hints or coaching during the interview.
+- Never break character. You are a human interviewer.
+- After {max_questions} questions, close with: "That wraps up our interview. We'll be in touch. Thank you, {name}."
+
+{interview_context}"""
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# NODE 1 — Retrieve Profile (reuse existing function signature)
+# ═══════════════════════════════════════════════════════════════════════════════
+async def interview_retrieve_profile(state: InterviewState) -> InterviewState:
+    user_id = state["user_id"]
+    try:
+        res = supabase.from_("profiles").select("*").eq("user_id", user_id).single().execute()
+        state["profile"] = res.data or {}
+    except:
+        state["profile"] = {}
+    try:
+        res = supabase.from_("resumes").select("tailored_json") \
+            .eq("user_id", user_id).order("created_at", desc=True).limit(1).execute()
+        state["resume"] = res.data[0] if res.data else None
+    except:
+        state["resume"] = None
+    print(f"[interview:retrieve_profile] {state['profile'].get('full_name', 'unknown')}")
+    return state
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# NODE 2 — Load Job Context
+# ═══════════════════════════════════════════════════════════════════════════════
+async def load_job_context(state: InterviewState) -> InterviewState:
+    try:
+        res = supabase.from_("jobs").select("*").eq("id", state["job_id"]).single().execute()
+        state["job"] = res.data or {}
+    except:
+        state["job"] = {}
+
+    # Extract skills gap from score_breakdown
+    job = state["job"]
+    skills_gap = []
+    if job.get("score_breakdown"):
+        try:
+            bd = json.loads(job["score_breakdown"]) if isinstance(job["score_breakdown"], str) else job["score_breakdown"]
+            skills_gap = bd.get("missing_skills", [])
+        except:
+            pass
+    state["skills_gap"] = skills_gap
+    print(f"[interview:load_job_context] job={job.get('role')} gaps={skills_gap}")
+    return state
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# NODE 3 — Load Interview State (question count, difficulty, score)
+# ═══════════════════════════════════════════════════════════════════════════════
+async def load_interview_state(state: InterviewState) -> InterviewState:
+    # Count how many questions have been asked so far
+    assistant_msgs = [m for m in state["messages"] if m["role"] == "assistant"]
+    state["question_count"] = len(assistant_msgs)
+
+    # Calculate difficulty based on running score
+    score = state.get("running_score", 5.0)
+    if score >= 7.5:
+        state["difficulty"] = "hard"
+    elif score >= 5.0:
+        state["difficulty"] = "medium"
+    else:
+        state["difficulty"] = "easy"
+
+    print(f"[interview:load_interview_state] q={state['question_count']} difficulty={state['difficulty']}")
+    return state
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# NODE 4 — Answer Evaluator (scores user's last answer 1-10)
+# ═══════════════════════════════════════════════════════════════════════════════
+async def answer_evaluator(state: InterviewState) -> InterviewState:
+    # Only evaluate if there's a previous user message (not the first turn)
+    user_msgs = [m for m in state["messages"] if m["role"] == "user"]
+    if len(user_msgs) < 1:
+        state["running_score"] = 5.0
+        return state
+
+    last_answer = user_msgs[-1]["content"]
+    job = state["job"] or {}
+
+    eval_prompt = f"""Rate this interview answer for a {job.get('role', 'technical')} role on a scale of 1-10.
+Answer: "{last_answer}"
+Job requires: {job.get('raw_text', '')[:500]}
+
+Respond with ONLY a number between 1 and 10. Nothing else."""
+
+    try:
+        eval_res = await llm.ainvoke([
+            SystemMessage(content="You are an interview evaluator. Respond with only a number."),
+            HumanMessage(content=eval_prompt)
+        ])
+        score = float(eval_res.content.strip().split()[0])
+        score = max(1.0, min(10.0, score))
+        # Running average
+        prev_score = state.get("running_score", 5.0)
+        q_count = state["question_count"]
+        state["running_score"] = (prev_score * q_count + score) / (q_count + 1)
+    except:
+        state["running_score"] = state.get("running_score", 5.0)
+
+    print(f"[interview:answer_evaluator] running_score={state['running_score']:.1f}")
+    return state
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# NODE 5 — Question Router
+# ═══════════════════════════════════════════════════════════════════════════════
+def interview_router(state: InterviewState) -> str:
+    duration = state.get("duration_minutes", 15)
+    # Approx questions for duration (~0.7 per minute)
+    max_questions = {5: 4, 10: 7, 15: 10, 20: 14, 30: 20}.get(duration, 10)
+
+    if state["question_count"] >= max_questions:
+        return "end"
+
+    score = state.get("running_score", 5.0)
+    if score < 4.0:
+        return "probe"  # dig deeper on same topic
+    else:
+        return "next"   # move to next topic
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# NODE 6 — Build Interview Context
+# ═══════════════════════════════════════════════════════════════════════════════
+async def build_interview_context(state: InterviewState) -> InterviewState:
+    profile = state["profile"] or {}
+    job = state["job"] or {}
+    resume = state["resume"] or {}
+    skills_gap = state.get("skills_gap") or []
+    difficulty = state.get("difficulty", "medium")
+    route = interview_router(state)
+
+    resume_json = resume.get("tailored_json", {}) if resume else {}
+    skills = ", ".join(profile.get("skills", []) or resume_json.get("skills", []))
+
+    gap_instruction = ""
+    if skills_gap:
+        gap_instruction = f"\nPRIORITY TOPICS (gaps identified in their application): {', '.join(skills_gap[:5])}\nMake sure to probe these areas."
+
+    route_instruction = {
+        "probe": "Their last answer was weak. Ask a follow-up that probes deeper on the same topic. Don't move on yet.",
+        "next": f"Move to the next topic. Difficulty level: {difficulty}. Ask something that requires depth.",
+        "end": "Wrap up the interview professionally. Thank them and say you'll be in touch.",
+    }.get(route, "")
+
+    duration = state.get("duration_minutes", 15)
+    max_questions = {5: 4, 10: 7, 15: 10, 20: 14, 30: 20}.get(duration, 10)
+
+    state["interview_context"] = f"""
+JOB: {job.get('role', 'Unknown')} at {job.get('company', 'Unknown')}
+DESCRIPTION: {(job.get('raw_text') or '')[:1000]}
+
+CANDIDATE SKILLS: {skills}
+EXPERIENCE: {profile.get('experience_summary', 'Not provided')}
+{gap_instruction}
+
+SESSION: Question {state['question_count'] + 1} of {max_questions} · Difficulty: {difficulty}
+INSTRUCTION: {route_instruction}
+""".strip()
+
+    print(f"[interview:build_interview_context] route={route} difficulty={difficulty}")
+    return state
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# NODE 7 — Session Saver
+# ═══════════════════════════════════════════════════════════════════════════════
+async def interview_session_saver(state: InterviewState) -> InterviewState:
+    try:
+        # Upsert session
+        existing = supabase.from_("interview_sessions").select("id") \
+            .eq("id", state["session_id"]).execute()
+
+        if existing.data:
+            supabase.from_("interview_sessions").update({
+                "messages": state["messages"],
+                "score": state.get("running_score"),
+            }).eq("id", state["session_id"]).execute()
+        else:
+            supabase.from_("interview_sessions").insert({
+                "id": state["session_id"],
+                "user_id": state["user_id"],
+                "job_id": state["job_id"],
+                "interview_type": "technical",
+                "messages": state["messages"],
+                "score": state.get("running_score"),
+            }).execute()
+    except Exception as e:
+        print(f"[interview:session_saver] error: {e}")
+    return state
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# NODE 8 — Interview Responder
+# ═══════════════════════════════════════════════════════════════════════════════
+async def interview_responder(state: InterviewState) -> InterviewState:
+    profile = state["profile"] or {}
+    job = state["job"] or {}
+    duration = state.get("duration_minutes", 15)
+    max_questions = {5: 4, 10: 7, 15: 10, 20: 14, 30: 20}.get(duration, 10)
+
+    system_prompt = INTERVIEW_IDENTITY.format(
+        company=job.get("company", "the company"),
+        name=profile.get("full_name", "candidate").split()[0],
+        role=job.get("role", "this role"),
+        max_questions=max_questions,
+        interview_context=state.get("interview_context", ""),
+    )
+
+    lc_messages = [SystemMessage(content=system_prompt)]
+    for m in state["messages"][-12:]:  # last 12 messages for context
+        if m["role"] == "user":
+            lc_messages.append(HumanMessage(content=m["content"]))
+        elif m["role"] == "assistant":
+            lc_messages.append(AIMessage(content=m["content"]))
+
+    full_response = ""
+    async for chunk in llm.astream(lc_messages):
+        token = chunk.content
+        if token:
+            full_response += token
+
+    state["final_response"] = full_response
+    print(f"[interview:responder] response_len={len(full_response)}")
+    return state
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Build Interview Graph
+# ═══════════════════════════════════════════════════════════════════════════════
+def build_interview_graph():
+    graph = StateGraph(InterviewState)
+
+    graph.add_node("retrieve_profile", interview_retrieve_profile)
+    graph.add_node("load_job_context", load_job_context)
+    graph.add_node("load_interview_state", load_interview_state)
+    graph.add_node("answer_evaluator", answer_evaluator)
+    graph.add_node("build_context", build_interview_context)
+    graph.add_node("session_saver", interview_session_saver)
+    graph.add_node("responder", interview_responder)
+
+    graph.set_entry_point("retrieve_profile")
+    graph.add_edge("retrieve_profile", "load_job_context")
+    graph.add_edge("load_job_context", "load_interview_state")
+    graph.add_edge("load_interview_state", "answer_evaluator")
+    graph.add_edge("answer_evaluator", "build_context")
+    graph.add_edge("build_context", "session_saver")
+    graph.add_edge("session_saver", "responder")
+    graph.add_edge("responder", END)
+
+    return graph.compile()
+
+interview_graph = build_interview_graph()
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# /interview endpoint
+# ═══════════════════════════════════════════════════════════════════════════════
+class InterviewRequest(BaseModel):
+    user_id: str
+    session_id: str
+    job_id: str
+    messages: List[dict]
+    duration_minutes: Optional[int] = 15
+    running_score: Optional[float] = 5.0
+
+@app.post("/interview")
+async def interview(req: InterviewRequest):
+    if not req.user_id or not req.job_id:
+        raise HTTPException(status_code=400, detail="user_id and job_id required")
+
+    last_user_msg = next(
+        (m["content"] for m in reversed(req.messages) if m["role"] == "user"), ""
+    )
+    if not last_user_msg:
+        raise HTTPException(status_code=400, detail="No user message found")
+
+    async def stream_response():
+        state: InterviewState = {
+            "user_id": req.user_id,
+            "session_id": req.session_id,
+            "job_id": req.job_id,
+            "user_message": last_user_msg,
+            "messages": req.messages,
+            "profile": None,
+            "job": None,
+            "resume": None,
+            "question_count": 0,
+            "duration_minutes": req.duration_minutes or 15,
+            "elapsed_seconds": 0,
+            "running_score": req.running_score or 5.0,
+            "skills_gap": None,
+            "last_question_topic": None,
+            "difficulty": "medium",
+            "interview_context": None,
+            "final_response": None,
+        }
+
+        final_state = await interview_graph.ainvoke(state)
+        final_response = final_state.get("final_response", "")
+
+        # Chunk-based streaming
+        CHUNK_SIZE = 12
+        for i in range(0, len(final_response), CHUNK_SIZE):
+            chunk = final_response[i:i + CHUNK_SIZE]
+            yield f"data: {json.dumps({'choices': [{'delta': {'content': chunk}}]})}\n\n"
+
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        stream_response(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
