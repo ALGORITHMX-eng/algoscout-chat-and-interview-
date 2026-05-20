@@ -857,7 +857,11 @@ async def interview_responder(state: InterviewState) -> InterviewState:
     lc_messages = [SystemMessage(content=system_prompt)]
     for m in state["messages"][-12:]:  # last 12 messages for context
         if m["role"] == "user":
-            lc_messages.append(HumanMessage(content=m["content"]))
+            # Replace hidden trigger with actual opening instruction
+            content = m["content"]
+            if content == "__ALGO_START__":
+                content = "Please begin the interview with a warm, human greeting. Ask how their day is going. Be natural."
+            lc_messages.append(HumanMessage(content=content))
         elif m["role"] == "assistant":
             lc_messages.append(AIMessage(content=m["content"]))
 
@@ -957,6 +961,85 @@ async def interview(req: InterviewRequest):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# /interview/feedback endpoint
+# ═══════════════════════════════════════════════════════════════════════════════
+class FeedbackRequest(BaseModel):
+    user_id: str
+    job_id: str
+    session_id: str
+    messages: List[dict]
+
+@app.post("/interview/feedback")
+async def interview_feedback(req: FeedbackRequest):
+    try:
+        # Fetch job for context
+        job_res = supabase.from_("jobs").select("role, company").eq("id", req.job_id).single().execute()
+        job = job_res.data or {}
+
+        transcript = "\n\n".join([
+            f"[{m['role'].upper()}]: {m['content']}"
+            for m in req.messages
+            if m.get("content") and m["content"] != "__ALGO_START__"
+        ])
+
+        feedback_prompt = f"""You are an expert interview coach. Analyze this {job.get('role', 'technical')} interview transcript for {job.get('company', 'the company')}.
+
+TRANSCRIPT:
+{transcript}
+
+Return ONLY valid JSON (no markdown, no extra text):
+{{
+  "overall_score": <0-100>,
+  "overall_verdict": "<one sentence>",
+  "sections": [
+    {{"category": "Communication", "score": <0-100>, "strength": "<what they did well>", "improvement": "<what to fix>"}},
+    {{"category": "Technical Knowledge", "score": <0-100>, "strength": "<what they did well>", "improvement": "<what to fix>"}},
+    {{"category": "Confidence & Delivery", "score": <0-100>, "strength": "<what they did well>", "improvement": "<what to fix>"}},
+    {{"category": "Relevance of Answers", "score": <0-100>, "strength": "<what they did well>", "improvement": "<what to fix>"}},
+    {{"category": "Storytelling & Examples", "score": <0-100>, "strength": "<what they did well>", "improvement": "<what to fix>"}}
+  ],
+  "top_strengths": ["<strength 1>", "<strength 2>", "<strength 3>"],
+  "critical_gaps": ["<gap 1>", "<gap 2>", "<gap 3>"],
+  "recommended_drills": [
+    {{"drill": "<name>", "why": "<reason>", "how": "<practice method>"}}
+  ],
+  "hire_likelihood": "<Strong Yes | Yes | Maybe | No>",
+  "coach_note": "<motivational closing note>"
+}}"""
+
+        feedback_llm = ChatGroq(
+            api_key=os.getenv("GROQ_API_KEY"),
+            model="llama-3.3-70b-versatile",
+            temperature=0.3,
+            streaming=False,
+        )
+
+        response = await feedback_llm.ainvoke([
+            SystemMessage(content="You are an interview evaluator. Return only valid JSON."),
+            HumanMessage(content=feedback_prompt),
+        ])
+
+        raw = response.content.strip().replace("```json", "").replace("```", "").strip()
+        feedback = json.loads(raw)
+
+        # Save to Supabase
+        try:
+            supabase.from_("interview_sessions").update({
+                "feedback": feedback,
+                "completed_at": __import__("datetime").datetime.utcnow().isoformat(),
+                "messages": req.messages,
+            }).eq("id", req.session_id).execute()
+        except Exception as e:
+            print(f"[feedback] save error: {e}")
+
+        return {"success": True, "feedback": feedback}
+
+    except Exception as e:
+        print(f"[feedback] error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
