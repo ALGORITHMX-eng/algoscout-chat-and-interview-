@@ -319,8 +319,8 @@ async def apply_tooling(state: AgentState) -> AgentState:
         "learning_path": "Give a ruthless 30-day plan with specific resources targeting their skills gap.",
         "salary_negotiation": "Give exact salary ranges for their role and level. Tell them word-for-word what to say.",
         "rejection_support": "One sentence acknowledging it. Then diagnose the real reason using their data. Then 3 specific fixes.",
-        "positioning_strategy": "Give a direct verdict — realistic or not. No hedging. Then give the exact positioning angle.",
-        "general_career": "Answer using their actual data. Reference real skills, companies, scores. No generic advice.",
+        "positioning_strategy": "Give a direct verdict — pick one, commit to it. If asked which is better, say exactly which one and why in one sentence. Never say 'I didn't explicitly say' or hedge. Reference your actual previous answer from session history if one exists.",
+        "general_career": "Answer using their actual data. Reference real skills, companies, scores. No generic advice. If asked to recall a previous verdict, state it directly and extend it — never say you didn't give one.",
     }.get(intent, "")
 
     state["career_context"] = f"""
