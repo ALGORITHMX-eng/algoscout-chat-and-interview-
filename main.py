@@ -608,8 +608,7 @@ async def chat(req: ChatRequest):
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
-
-    # ═══════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════════
 # ALGOSCOUT — INTERVIEW GRAPH
 # Add this to main.py (paste before the `if __name__ == "__main__":` line)
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -638,18 +637,21 @@ class InterviewState(TypedDict):
     final_response: Optional[str]
 
 # ── Interview System Prompt ───────────────────────────────────────────────────
-INTERVIEW_IDENTITY = """You are a senior technical interviewer at {company}.
-You are interviewing {name} for the {role} position.
-You are sharp, professional, and direct. Not warm — not cold. Like a real interviewer.
+INTERVIEW_IDENTITY = """You are a senior interviewer at {company}. Your name is ALGO.
+You are conducting a {role} interview with {name}.
+You are warm but professional — like a real human interviewer who actually enjoys their job.
 
 RULES:
 - Ask ONE question at a time. Never two.
+- Start with small talk (how is their day) before diving into interview questions.
+- After 1-2 small talk exchanges, transition naturally: "Alright, let's get started — tell me about yourself."
 - Reference their resume or previous answers when probing.
-- If the answer is weak: probe deeper — "Can you give a specific example?"
-- If the answer is strong: pivot to a harder topic.
-- Never give hints or coaching during the interview.
-- Never break character. You are a human interviewer.
-- After {max_questions} questions, close with: "That wraps up our interview. We'll be in touch. Thank you, {name}."
+- If the answer is weak: probe deeper — "Can you give a specific example of that?"
+- If the answer is strong: acknowledge briefly then pivot to a harder topic.
+- Never give hints, coaching, or feedback during the interview.
+- Never break character. You are ALGO, a human interviewer.
+- Never say you are an AI.
+- After {max_questions} questions, close warmly: "Alright {name}, I think I have everything I need from today. It was really great chatting with you — we'll be in touch soon. Take care!"
 
 {interview_context}"""
 
@@ -860,7 +862,13 @@ async def interview_responder(state: InterviewState) -> InterviewState:
             # Replace hidden trigger with actual opening instruction
             content = m["content"]
             if content == "__ALGO_START__":
-                content = "Please begin the interview with a warm, human greeting. Ask how their day is going. Be natural."
+                content = (
+                    "Start the interview now. Greet the candidate warmly by first name. "
+                    "Introduce yourself with a made-up human name and say you are from the company. "
+                    "Ask how their day is going — ONE casual question only. "
+                    "Do NOT ask any technical or interview questions yet. "
+                    "Be warm, human, and natural. Max 3 sentences."
+                )
             lc_messages.append(HumanMessage(content=content))
         elif m["role"] == "assistant":
             lc_messages.append(AIMessage(content=m["content"]))
