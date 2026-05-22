@@ -926,17 +926,12 @@ async def interview(req: InterviewRequest):
     if not req.user_id or not req.job_id:
         raise HTTPException(status_code=400, detail="user_id and job_id required")
 
-    # Filter out internal trigger messages
-    clean_messages = [
-        m for m in req.messages
-        if m.get("content") and m["content"] != "__ALGO_START__"
-    ]
-
+    
     last_user_msg = next(
-        (m["content"] for m in reversed(clean_messages) if m["role"] == "user"), ""
-    )
-    if not last_user_msg:
-        raise HTTPException(status_code=400, detail="No user message found")
+    (m["content"] for m in reversed(req.messages) if m["role"] == "user"), ""
+)
+if not last_user_msg:
+    raise HTTPException(status_code=400, detail="No user message found")
 
     async def stream_response():
         state: InterviewState = {
@@ -944,7 +939,7 @@ async def interview(req: InterviewRequest):
             "session_id": req.session_id,
             "job_id": req.job_id,
             "user_message": last_user_msg,
-            "messages": clean_messages,
+            "messages": req.messages,
             "profile": None,
             "job": None,
             "resume": None,
