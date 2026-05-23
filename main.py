@@ -190,27 +190,22 @@ def router(state: AgentState) -> str:
     msg = state["user_message"].lower()
 
     off_topic_signals = [
-    # hacking / security
-    "hack", "exploit", "vulnerability", "malware",
-    # general knowledge
-    "poem", "weather", "news today", "latest news", "breaking news",
-    "stock price", "recipe", "song lyrics", "joke", "politics",
-    "sports score", "what is the capital", "tell me a story",
-    # coding help
-    "help me with coding", "help me code", "write code", "write a script",
-    "write a program", "debug my code", "fix my code", "explain this code",
-    "how to code", "programming tutorial",
-    # other
-    "translate", "summarize this article", "write an essay",
-    "write a poem", "generate image", "draw",
-]
-# Allow career-related coding topics
-career_coding_signals = [
-    "github", "portfolio", "project", "technical interview",
-    "coding interview", "leetcode", "system design", "tech stack",
-]
-is_career_coding = any(signal in msg for signal in career_coding_signals)
-is_off_topic = any(signal in msg for signal in off_topic_signals) and not is_career_coding
+        "hack", "exploit", "vulnerability", "malware",
+        "poem", "weather", "news today", "latest news", "breaking news",
+        "stock price", "recipe", "song lyrics", "joke", "politics",
+        "sports score", "what is the capital", "tell me a story",
+        "help me with coding", "help me code", "write code", "write a script",
+        "write a program", "debug my code", "fix my code", "explain this code",
+        "how to code", "programming tutorial",
+        "translate", "summarize this article", "write an essay",
+        "write a poem", "generate image", "draw",
+    ]
+    career_coding_signals = [
+        "github", "portfolio", "project", "technical interview",
+        "coding interview", "leetcode", "system design", "tech stack",
+    ]
+    is_career_coding = any(signal in msg for signal in career_coding_signals)
+    is_off_topic = any(signal in msg for signal in off_topic_signals) and not is_career_coding
 
     if is_off_topic:
         return "off_topic"
