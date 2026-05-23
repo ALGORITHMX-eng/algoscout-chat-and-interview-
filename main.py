@@ -929,9 +929,9 @@ async def interview(req: InterviewRequest):
     
     last_user_msg = next(
     (m["content"] for m in reversed(req.messages) if m["role"] == "user"), ""
-)
-if not last_user_msg:
-    raise HTTPException(status_code=400, detail="No user message found")
+    )
+    if not last_user_msg:
+        raise HTTPException(status_code=400, detail="No user message found")
 
     async def stream_response():
         state: InterviewState = {
@@ -1039,7 +1039,7 @@ Return ONLY valid JSON (no markdown, no extra text):
             supabase.from_("interview_sessions").update({
                 "feedback": feedback,
                 "completed_at": __import__("datetime").datetime.utcnow().isoformat(),
-                "messages": clean_messages,
+                "messages": req.messages,
             }).eq("id", req.session_id).execute()
         except Exception as e:
             print(f"[feedback] save error: {e}")
