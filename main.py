@@ -861,19 +861,21 @@ async def interview_responder(state: InterviewState) -> InterviewState:
     for m in state["messages"][-12:]:  # last 12 messages for context
         if m["role"] == "user":
             # Replace hidden trigger with actual opening instruction
+            
+            
             content = m["content"]
             if content == "__ALGO_START__":
-                if content == "__ALGO_START__":
-    content = (
-        "Greet the candidate by first name only. "
-        "Say your name is ALGO and you're from the company. "
-        "Ask how their day is going — ONE short casual question, max 8 words. "
-        "Total response: 2 sentences max. No fluff, no wishes, no corporate warmth. "
-        "Sound like a real person, not a chatbot."
-            )
+                content = (
+                    "Greet the candidate by first name only. "
+                    "Say your name is ALGO and you're from the company. "
+                    "Ask how their day is going — ONE short casual question, max 8 words. "
+                    "Total response: 2 sentences max. No fluff, no wishes, no corporate warmth. "
+                    "Sound like a real person, not a chatbot."
+                )
             lc_messages.append(HumanMessage(content=content))
         elif m["role"] == "assistant":
             lc_messages.append(AIMessage(content=m["content"]))
+            
 
     full_response = ""
     async for chunk in llm.astream(lc_messages):
