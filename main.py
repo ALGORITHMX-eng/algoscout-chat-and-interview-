@@ -67,200 +67,314 @@ class ChatRequest(BaseModel):
     session_id: str
     messages: List[dict]
 
-# ── Identity-only system prompt ───────────────────────────────────────────────
-IDENTITY_PROMPT = """You are ALGO — AlgoScout's AI career strategist.
-You are the sharp friend who happens to know exactly how hiring works.
-You do not perform helpfulness. You deliver results.
-STRICT RULE: If anyone asks you to write code, debug code, or help with programming 
-unrelated to their job search, refuse and redirect to career topics only.
+import os
+import json
+import asyncio
+from typing import TypedDict, List, Optional
+from dotenv import load_dotenv
+from collections import Counter
 
-RULES:
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+
+from langgraph.graph import StateGraph, END
+from langchain_groq import ChatGroq
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+from supabase import create_client, Client
+
+load_dotenv()
+
+# ── Clients ───────────────────────────────────────────────────────────────────
+supabase: Client = create_client(
+    os.getenv("SUPABASE_URL"),
+    os.getenv("SUPABASE_SERVICE_ROLE_KEY"),
+)
+
+llm = ChatGroq(
+    api_key=os.getenv("GROQ_API_KEY"),
+    model="llama-3.3-70b-versatile",
+    temperature=0.2,
+    streaming=True,
+    frequency_penalty=0.8,
+    presence_penalty=0.6,
+)
+
+app = FastAPI(title="AlgoScout LangGraph Backend")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ── State ─────────────────────────────────────────────────────────────────────
+class AgentState(TypedDict):
+    user_id: str
+    session_id: str
+    user_message: str
+    messages: List[dict]
+    profile: Optional[dict]
+    applied_jobs: Optional[List[dict]]
+    rejected_jobs: Optional[List[dict]]
+    pending_jobs: Optional[List[dict]]
+    recent_interviews: Optional[List[dict]]
+    session_history: Optional[List[dict]]
+    resume: Optional[dict]
+    experience_tier: Optional[str]
+    skills_gap: Optional[List[str]]
+    detected_intent: Optional[str]
+    detected_route: Optional[str]
+    resume_context: Optional[str]
+    career_context: Optional[str]
+    previous_conclusions: Optional[dict]
+    final_response: Optional[str]
+
+class ChatRequest(BaseModel):
+    user_id: str
+    session_id: str
+    messages: List[dict]
+
+# ── AlgoScout App Navigation Map ─────────────────────────────────────────────
+APP_NAVIGATION = """
+ALGOSCOUT APP NAVIGATION (use this to direct users):
+- Dashboard → view and manage all job leads, approve/reject jobs
+- Chat (current) → career coaching, resume advice, job strategy
+- Interview tab → practice voice or text interviews for specific jobs
+- Profile/Settings → update resume, skills, work preferences, target roles
+- Add Job button → manually add a job by URL or company name
+- Job detail page → view tailored resume and cover letter for a specific job
+"""
+
+# ── Identity System Prompt ────────────────────────────────────────────────────
+IDENTITY_PROMPT = """You are ALGO — AlgoScout's AI career strategist and assistant.
+You are the sharp, warm friend who knows exactly how hiring works and also knows the AlgoScout app inside out.
+
+{app_navigation}
+
+PERSONALITY:
+- When someone greets you casually (hey, hi, hello, what's up), greet them back warmly first. Ask how they're doing. Don't jump straight to career data.
+- When someone asks a question, answer it directly and naturally — like a smart friend, not a corporate bot.
+- When someone asks where to do something in the app, tell them exactly where to go.
+- When someone is venting or frustrated, acknowledge it first before strategy.
+
+CAREER RULES:
 - Only use data explicitly provided in this prompt. Never invent skills, companies, or history.
 - Deliver verdict first, follow up second.
 - 3 paragraphs max unless writing a full rewrite or plan.
 - No generic advice. Every sentence must trace to their actual data.
 - Write like a sharp person talking, not a consultant delivering a report.
 - No headers like "Strengths:", "Next Action:", "Assessment:".
-- NEVER write code, debug code,helping with something aside career talk or help with programming tasks. If asked, say: "I only handle career questions — try Claude.ai or ChatGPT for coding help."""
+
+OFF-TOPIC RULE:
+- If someone asks for coding help unrelated to their career (write this script, debug my code, etc.), say: "That's outside what I do — try Claude.ai or ChatGPT for that. Anything career-wise I can help with?"
+- Everything else career-related, app-related, or conversational is fair game.
+"""
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# NODE 1 — Retrieve Profile
+# NODE 1 — Retrieve Profile + History (parallelized)
 # ═══════════════════════════════════════════════════════════════════════════════
 async def retrieve_profile(state: AgentState) -> AgentState:
     user_id = state["user_id"]
-    try:
-        res = supabase.from_("profiles").select("*").eq("user_id", user_id).single().execute()
-        state["profile"] = res.data or {}
-    except:
-        state["profile"] = {}
-    try:
-        res = supabase.from_("resumes").select("tailored_json, created_at") \
-            .eq("user_id", user_id).order("created_at", desc=True).limit(1).execute()
-        state["resume"] = res.data[0] if res.data else None
-    except:
-        state["resume"] = None
+    session_id = state["session_id"]
+
+    def fetch_profile():
+        try:
+            return supabase.from_("profiles").select("*").eq("user_id", user_id).single().execute()
+        except:
+            return None
+
+    def fetch_resume():
+        try:
+            return supabase.from_("resumes").select("tailored_json, created_at") \
+                .eq("user_id", user_id).order("created_at", desc=True).limit(1).execute()
+        except:
+            return None
+
+    profile_res, resume_res = await asyncio.gather(
+        asyncio.to_thread(fetch_profile),
+        asyncio.to_thread(fetch_resume),
+    )
+
+    state["profile"] = (profile_res.data if profile_res else None) or {}
+    state["resume"] = (resume_res.data[0] if resume_res and resume_res.data else None)
     print(f"[node:retrieve_profile] {state['profile'].get('full_name', 'unknown')}")
     return state
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# NODE 2 — Analyze History
+# NODE 2 — Analyze History (parallelized)
 # ═══════════════════════════════════════════════════════════════════════════════
 async def analyze_history(state: AgentState) -> AgentState:
     user_id = state["user_id"]
     session_id = state["session_id"]
 
-    try:
-        res = supabase.from_("jobs").select("company, role, score, score_reason, score_breakdown") \
-            .eq("user_id", user_id).eq("status", "approved") \
-            .order("found_at", desc=True).limit(10).execute()
-        state["applied_jobs"] = res.data or []
-    except:
-        state["applied_jobs"] = []
-    try:
-        res = supabase.from_("jobs").select("company, role, score") \
-            .eq("user_id", user_id).eq("status", "rejected") \
-            .order("found_at", desc=True).limit(10).execute()
-        state["rejected_jobs"] = res.data or []
-    except:
-        state["rejected_jobs"] = []
-    try:
-        res = supabase.from_("jobs").select("company, role, score, location") \
-            .eq("user_id", user_id).eq("status", "pending").gte("score", 7) \
-            .order("score", desc=True).limit(5).execute()
-        state["pending_jobs"] = res.data or []
-    except:
-        state["pending_jobs"] = []
-    try:
-        res = supabase.from_("interview_sessions").select("interview_type, created_at") \
-            .eq("user_id", user_id).order("created_at", desc=True).limit(5).execute()
-        state["recent_interviews"] = res.data or []
-    except:
-        state["recent_interviews"] = []
+    def fetch_applied():
+        try:
+            return supabase.from_("jobs").select("company, role, score, score_reason, score_breakdown") \
+                .eq("user_id", user_id).eq("status", "approved") \
+                .order("found_at", desc=True).limit(10).execute()
+        except: return None
 
-    # ✅ FIX: Only load history from THIS session — no cross-session leaking
-    try:
-        res = supabase.from_("coach_conversations").select("role, content") \
-            .eq("user_id", user_id) \
-            .eq("session_id", session_id) \
-            .order("created_at", desc=True).limit(20).execute()
-        state["session_history"] = list(reversed(res.data or []))
-    except:
-        state["session_history"] = []
+    def fetch_pending():
+        try:
+            return supabase.from_("jobs").select("company, role, score, location") \
+                .eq("user_id", user_id).eq("status", "pending").gte("score", 7) \
+                .order("score", desc=True).limit(5).execute()
+        except: return None
 
-    # Skills gap from job score breakdowns
+    def fetch_history():
+        try:
+            return supabase.from_("coach_conversations").select("role, content") \
+                .eq("user_id", user_id).eq("session_id", session_id) \
+                .order("created_at", desc=True).limit(20).execute()
+        except: return None
+
+    def fetch_conclusions():
+        try:
+            return supabase.from_("session_conclusions").select("conclusions") \
+                .eq("user_id", user_id).eq("session_id", session_id).single().execute()
+        except: return None
+
+    applied_res, pending_res, history_res, conclusions_res = await asyncio.gather(
+        asyncio.to_thread(fetch_applied),
+        asyncio.to_thread(fetch_pending),
+        asyncio.to_thread(fetch_history),
+        asyncio.to_thread(fetch_conclusions),
+    )
+
+    state["applied_jobs"] = (applied_res.data if applied_res else None) or []
+    state["pending_jobs"] = (pending_res.data if pending_res else None) or []
+    state["session_history"] = list(reversed((history_res.data if history_res else None) or []))
+    state["previous_conclusions"] = (conclusions_res.data.get("conclusions", {}) if conclusions_res and conclusions_res.data else {})
+    state["rejected_jobs"] = []
+    state["recent_interviews"] = []
+
     all_missing = []
     for job in state["applied_jobs"]:
         if job.get("score_breakdown"):
             try:
                 bd = json.loads(job["score_breakdown"]) if isinstance(job["score_breakdown"], str) else job["score_breakdown"]
                 all_missing.extend(bd.get("missing_skills", []))
-            except:
-                pass
+            except: pass
     state["skills_gap"] = [s for s, _ in Counter(all_missing).most_common(10)]
 
-    # ✅ FIX: Load previous_conclusions from Supabase so consistency survives across turns
+    print(f"[node:analyze_history] applied={len(state['applied_jobs'])} history={len(state['session_history'])}")
+    return state
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# NODE 3 — Smart Classifier (LLM-based routing)
+# ═══════════════════════════════════════════════════════════════════════════════
+async def smart_classifier(state: AgentState) -> AgentState:
+    msg = state["user_message"]
+
+    classify_prompt = f"""Classify this message into exactly one category:
+
+- "greeting" → casual hello, hi, hey, what's up, how are you, good morning — small talk with no specific request
+- "emotional" → user is frustrated, sad, giving up, venting about job search, feeling hopeless
+- "off_topic" → requests for coding help (write code, debug, script), recipes, weather, news, sports scores, creative writing unrelated to career
+- "career" → everything else: job questions, resume help, interview prep, salary, skills, app navigation, AlgoScout features, career strategy
+
+Message: "{msg}"
+
+Reply with ONLY one word: greeting, emotional, off_topic, or career"""
+
     try:
-        res = supabase.from_("session_conclusions").select("conclusions") \
-            .eq("user_id", user_id) \
-            .eq("session_id", session_id) \
-            .single().execute()
-        state["previous_conclusions"] = res.data.get("conclusions", {}) if res.data else {}
+        result = await llm.ainvoke([
+            SystemMessage(content="You are a message classifier. Reply with only one word."),
+            HumanMessage(content=classify_prompt)
+        ])
+        category = result.content.strip().lower().split()[0]
+        if category in ["greeting", "emotional", "off_topic", "career"]:
+            state["detected_route"] = category
+        else:
+            state["detected_route"] = "career"
     except:
-        state["previous_conclusions"] = {}
+        state["detected_route"] = "career"
 
-    print(f"[node:analyze_history] applied={len(state['applied_jobs'])} session_history={len(state['session_history'])} conclusions={list(state['previous_conclusions'].keys())}")
+    print(f"[node:smart_classifier] route={state['detected_route']} msg='{msg[:50]}'")
     return state
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# NODE 3 — Emotional Detector
-# ═══════════════════════════════════════════════════════════════════════════════
-async def emotional_detector(state: AgentState) -> AgentState:
-    msg = state["user_message"].lower()
-    emotional_signals = [
-        "give up", "hopeless", "depressed", "worthless", "tired of",
-        "frustrated", "rejected", "nobody wants me", "what's the point",
-        "want to quit", "can't do this", "feel like a failure", "unlucky",
-        "😭", "😔", "crying", "burnt out", "exhausted"
-    ]
-    state["is_emotional"] = any(signal in msg for signal in emotional_signals)
-    print(f"[node:emotional_detector] is_emotional={state['is_emotional']}")
-    return state
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# NODE 4 — Router (conditional edges live here)
-# ═══════════════════════════════════════════════════════════════════════════════
+# ── Router function (reads from state) ────────────────────────────────────────
 def router(state: AgentState) -> str:
-    msg = state["user_message"].lower()
-
-    off_topic_signals = [
-        "hack", "exploit", "vulnerability", "malware",
-        "poem", "weather", "news today", "latest news", "breaking news",
-        "stock price", "recipe", "song lyrics", "joke", "politics",
-        "sports score", "what is the capital", "tell me a story",
-        "help me with coding", "help me code", "write code", "write a script",
-        "write a program", "debug my code", "fix my code", "explain this code",
-        "how to code", "programming tutorial",
-        "translate", "summarize this article", "write an essay",
-        "write a poem", "generate image", "draw",
-    ]
-    career_coding_signals = [
-        "github", "portfolio", "project", "technical interview",
-        "coding interview", "leetcode", "system design", "tech stack",
-    ]
-    is_career_coding = any(signal in msg for signal in career_coding_signals)
-    is_off_topic = any(signal in msg for signal in off_topic_signals) and not is_career_coding
-
-    if is_off_topic:
-        return "off_topic"
-    elif state.get("is_emotional"):
-        return "emotional"
-    else:
-        return "career"
+    return state.get("detected_route", "career")
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# NODE 5 — Off Topic Rejector (no LLM call — instant, free)
+# NODE 4 — Greeting Responder (no career data needed)
+# ═══════════════════════════════════════════════════════════════════════════════
+async def greeting_responder(state: AgentState) -> AgentState:
+    profile = state["profile"] or {}
+    name = profile.get("full_name", "").split()[0] if profile.get("full_name") else ""
+
+    greeting_prompt = f"""You are ALGO — a warm, smart career assistant inside the AlgoScout app.
+{"The user's name is " + name + "." if name else ""}
+
+The user just sent a casual greeting or small talk message.
+
+RULES:
+- Greet them back warmly and naturally. Use their name if you have it.
+- Ask how they're doing or what's on their mind — ONE short question.
+- Do NOT dump career data or job listings at them unprompted.
+- Do NOT say "I'm here to help with your career" or any corporate opening.
+- Max 2 sentences. Sound like a real person."""
+
+    lc_messages = [
+        SystemMessage(content=greeting_prompt),
+        HumanMessage(content=state["user_message"])
+    ]
+
+    full_response = ""
+    async for chunk in llm.astream(lc_messages):
+        token = chunk.content
+        if token:
+            full_response += token
+
+    state["final_response"] = full_response
+    print(f"[node:greeting_responder] done")
+    return state
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# NODE 5 — Off Topic Rejector (no LLM call)
 # ═══════════════════════════════════════════════════════════════════════════════
 async def off_topic_rejector(state: AgentState) -> AgentState:
     state["final_response"] = (
-        "I'm ALGO — AlgoScout's career assistant. "
-        "I only handle career questions: resumes, job strategy, interviews, salary, and positioning. "
-        "Try Claude.ai or ChatGPT for everything else."
+        "That's outside what I do — try Claude.ai or ChatGPT for that. "
+        "Anything career-wise I can help with?"
     )
-    print("[node:off_topic_rejector] blocked off-topic request")
+    print("[node:off_topic_rejector] blocked")
     return state
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# NODE 6 — Career Reasoning (seniority + intent — no LLM call)
+# NODE 6 — Career Reasoning (seniority + intent)
 # ═══════════════════════════════════════════════════════════════════════════════
 async def career_reasoning(state: AgentState) -> AgentState:
     profile = state["profile"]
     years_exp = profile.get("years_experience", 0)
 
-    if years_exp == 0:
-        tier = "entry-level (0 years)"
-    elif years_exp <= 2:
-        tier = "junior (1-2 years)"
-    elif years_exp <= 5:
-        tier = "mid-level (3-5 years)"
-    else:
-        tier = "senior (5+ years)"
+    if years_exp == 0: tier = "entry-level (0 years)"
+    elif years_exp <= 2: tier = "junior (1-2 years)"
+    elif years_exp <= 5: tier = "mid-level (3-5 years)"
+    else: tier = "senior (5+ years)"
     state["experience_tier"] = tier
 
     msg = state["user_message"].lower()
-    if any(w in msg for w in ["rewrite", "bullet", "resume"]):
+    if any(w in msg for w in ["rewrite", "bullet", "resume", "cv"]):
         intent = "resume_help"
     elif "cover letter" in msg:
         intent = "cover_letter"
     elif any(w in msg for w in ["interview", "practice", "question"]):
         intent = "interview_prep"
-    elif any(w in msg for w in ["learn", "skill", "improve", "roadmap"]):
+    elif any(w in msg for w in ["learn", "skill", "improve", "roadmap", "course"]):
         intent = "learning_path"
-    elif any(w in msg for w in ["salary", "negotiate", "offer", "compensation"]):
+    elif any(w in msg for w in ["salary", "negotiate", "offer", "compensation", "pay"]):
         intent = "salary_negotiation"
-    elif any(w in msg for w in ["reject", "ghosted", "no response"]):
+    elif any(w in msg for w in ["reject", "ghosted", "no response", "silence"]):
         intent = "rejection_support"
     elif any(w in msg for w in ["position", "realistic", "candidate", "angle", "chance", "apply", "stand"]):
         intent = "positioning_strategy"
+    elif any(w in msg for w in ["where", "how do i", "settings", "profile", "update", "change", "find", "navigate"]):
+        intent = "app_navigation"
     else:
         intent = "general_career"
     state["detected_intent"] = intent
@@ -269,14 +383,13 @@ async def career_reasoning(state: AgentState) -> AgentState:
     return state
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# NODE 7 — Resume Grounder (only runs when resume is relevant)
+# NODE 7 — Resume Grounder
 # ═══════════════════════════════════════════════════════════════════════════════
 async def resume_grounder(state: AgentState) -> AgentState:
     resume_relevant_intents = ["resume_help", "cover_letter", "positioning_strategy", "general_career"]
     if state["detected_intent"] not in resume_relevant_intents or not state["resume"]:
         state["resume_context"] = None
         return state
-
     try:
         resume_json = state["resume"].get("tailored_json", {})
         skills = ", ".join(resume_json.get("skills", []))
@@ -286,21 +399,17 @@ async def resume_grounder(state: AgentState) -> AgentState:
             f"• {e.get('role')} at {e.get('company')}: {e.get('summary', '')}"
             for e in experience[:3]
         ])
-        state["resume_context"] = f"""
-RESUME DATA (ground all claims here):
+        state["resume_context"] = f"""RESUME DATA:
 Summary: {summary}
 Skills: {skills}
 Experience:
-{exp_text}
-""".strip()
+{exp_text}""".strip()
     except:
         state["resume_context"] = None
-
-    print(f"[node:resume_grounder] resume_context={'loaded' if state['resume_context'] else 'empty'}")
     return state
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# NODE 8 — Apply Tooling (build final career context)
+# NODE 8 — Apply Tooling (build career context)
 # ═══════════════════════════════════════════════════════════════════════════════
 async def apply_tooling(state: AgentState) -> AgentState:
     profile = state["profile"]
@@ -310,7 +419,6 @@ async def apply_tooling(state: AgentState) -> AgentState:
     skills = ", ".join(profile.get("skills", [])) or "Not specified"
     target_roles = ", ".join(profile.get("preferred_titles", [])) or "Not specified"
 
-    # ✅ FIX: Only inject skills_gap when actually relevant to intent
     skills_gap_intents = ["learning_path", "rejection_support", "positioning_strategy", "general_career"]
     skills_gap_text = ""
     if intent in skills_gap_intents and state["skills_gap"]:
@@ -330,11 +438,12 @@ async def apply_tooling(state: AgentState) -> AgentState:
         "resume_help": "Rewrite their bullets now. Don't ask — just do it. Show BEFORE and AFTER. Name exactly what was weak.",
         "cover_letter": "Write the full cover letter now. Use their most recent applied job as context.",
         "interview_prep": "Give 3 hard, role-specific questions at their experience level. Answer one yourself as a model.",
-        "learning_path": "Give a ruthless 30-day plan with specific resources targeting their skills gap.",
+        "learning_path": "Don't give a rigid 30-day plan. Pick ONE skill from their gap that matches what companies in their applied jobs actually want. Tell them exactly what to build with it — a specific mini project. One skill, one project, concrete outcome. Not a syllabus.",
         "salary_negotiation": "Give exact salary ranges for their role and level. Tell them word-for-word what to say.",
         "rejection_support": "One sentence acknowledging it. Then diagnose the real reason using their data. Then 3 specific fixes.",
-        "positioning_strategy": "Give a direct verdict — pick one, commit to it. If asked which is better, say exactly which one and why in one sentence. Never say 'I didn't explicitly say' or hedge. Reference your actual previous answer from session history if one exists.",
-        "general_career": "Answer using their actual data. Reference real skills, companies, scores. No generic advice. If asked to recall a previous verdict, state it directly and extend it — never say you didn't give one.",
+        "positioning_strategy": "Give a direct verdict. No hedging. Reference session history if one exists.",
+        "app_navigation": "Tell them exactly where to go in the app. Be specific — Dashboard, Profile tab, Interview tab, Settings, Add Job button. Don't be vague.",
+        "general_career": "Answer using their actual data. Reference real skills, companies, scores. No generic advice.",
     }.get(intent, "")
 
     state["career_context"] = f"""
@@ -358,46 +467,30 @@ INTENT: {intent}
 INSTRUCTION: {intent_instructions}
 """.strip()
 
-    # Append resume context if loaded
     if state.get("resume_context"):
         state["career_context"] += f"\n\n{state['resume_context']}"
 
-    print(f"[node:apply_tooling] context built for intent={intent}")
+    if state.get("previous_conclusions") and len(state["previous_conclusions"]) > 0:
+        state["career_context"] += "\n\nPREVIOUS CONCLUSIONS THIS SESSION: " + json.dumps(state["previous_conclusions"]) + "\nStay consistent with these."
+
+    print(f"[node:apply_tooling] intent={intent}")
     return state
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # NODE 9 — Consistency Checker
 # ═══════════════════════════════════════════════════════════════════════════════
 async def consistency_checker(state: AgentState) -> AgentState:
-    # Build a short memory of key conclusions made this session
-    # so the responder doesn't contradict itself
     conclusions = state.get("previous_conclusions", {})
     intent = state["detected_intent"]
-
-    # Tag the current intent verdict so future calls can reference it
-    conclusions[intent] = {
-        "tier": state["experience_tier"],
-        "skills_gap": state["skills_gap"],
-    }
+    conclusions[intent] = {"tier": state["experience_tier"], "skills_gap": state["skills_gap"]}
     state["previous_conclusions"] = conclusions
 
-    # Inject consistency note into career_context if we've already made a verdict
-    if len(conclusions) > 1:
-        consistency_note = "\nPREVIOUS CONCLUSIONS THIS SESSION: " + json.dumps(
-            {k: v for k, v in conclusions.items() if k != intent}
-        ) + "\nStay consistent with these. Do not contradict them."
-        state["career_context"] += consistency_note
-
-    # ✅ FIX: Persist conclusions to Supabase so next turn loads them correctly
     try:
         existing = supabase.from_("session_conclusions").select("id") \
-            .eq("user_id", state["user_id"]) \
-            .eq("session_id", state["session_id"]) \
-            .execute()
+            .eq("user_id", state["user_id"]).eq("session_id", state["session_id"]).execute()
         if existing.data:
             supabase.from_("session_conclusions").update({"conclusions": conclusions}) \
-                .eq("user_id", state["user_id"]) \
-                .eq("session_id", state["session_id"]).execute()
+                .eq("user_id", state["user_id"]).eq("session_id", state["session_id"]).execute()
         else:
             supabase.from_("session_conclusions").insert({
                 "user_id": state["user_id"],
@@ -406,42 +499,27 @@ async def consistency_checker(state: AgentState) -> AgentState:
             }).execute()
     except Exception as e:
         print(f"[node:consistency_checker] save error: {e}")
-
-    print(f"[node:consistency_checker] conclusions tracked={list(conclusions.keys())}")
     return state
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# NODE 10 — Memory Summarizer (runs at end of every turn)
-# ═══════════════════════════════════════════════════════════════════════════════
-async def memory_summarizer(state: AgentState) -> AgentState:
-    # Save this turn to Supabase under the session_id (not just user_id)
-    # Actual save happens in responder after streaming completes
-    # This node just prepares the summary tag
-    print(f"[node:memory_summarizer] session={state['session_id']} ready to persist")
-    return state
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# NODE 11 — Responder (LLM call — career path)
+# NODE 10 — Responder (career path LLM call)
 # ═══════════════════════════════════════════════════════════════════════════════
 async def responder(state: AgentState) -> AgentState:
-    # Build messages
-    lc_messages = [SystemMessage(content=f"{IDENTITY_PROMPT}\n\n{state['career_context']}")]
+    system = IDENTITY_PROMPT.format(app_navigation=APP_NAVIGATION)
+    lc_messages = [SystemMessage(content=f"{system}\n\n{state['career_context']}")]
 
-    # Session history only (scoped, no cross-session leaking)
     for h in (state["session_history"] or []):
         if h["role"] == "user":
             lc_messages.append(HumanMessage(content=h["content"]))
         else:
             lc_messages.append(AIMessage(content=h["content"]))
 
-    # Current request messages (last 6)
     for m in state["messages"][-6:]:
         if m["role"] == "user":
             lc_messages.append(HumanMessage(content=m["content"]))
         elif m["role"] == "assistant":
             lc_messages.append(AIMessage(content=m["content"]))
 
-    # Stream
     full_response = ""
     async for chunk in llm.astream(lc_messages):
         token = chunk.content
@@ -449,33 +527,27 @@ async def responder(state: AgentState) -> AgentState:
             full_response += token
 
     state["final_response"] = full_response
-    print(f"[node:responder] response_len={len(full_response)}")
+    print(f"[node:responder] len={len(full_response)}")
     return state
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# NODE 11b — Emotional Responder (separate LLM call with empathy prompt)
+# NODE 11 — Emotional Responder
 # ═══════════════════════════════════════════════════════════════════════════════
 async def emotional_responder(state: AgentState) -> AgentState:
-    profile = state["profile"]
-    name = profile.get("full_name", "").split()[0] if profile.get("full_name") else "hey"
+    profile = state["profile"] or {}
+    name = profile.get("full_name", "").split()[0] if profile.get("full_name") else ""
 
-    emotional_prompt = f"""You are ALGO — a career assistant who actually cares.
-{name} is going through a hard moment in their job search. 
+    prompt = f"""You are ALGO — a career assistant who actually cares.
+{"User's name is " + name + "." if name else ""}
 
-RULES FOR THIS RESPONSE:
+RULES:
 - Acknowledge the emotion in ONE sentence. Be human, not corporate.
 - No bullet points. No headers. No action items yet.
-- Do NOT say "I can sense your frustration" — that's robotic.
-- Do NOT pitch AlgoScout features.
-- Do NOT give a numbered list of things to do.
-- After acknowledging, ask ONE genuine question to understand what happened.
-- Max 3 sentences total.
-- Write like a real person who has been there, not a chatbot."""
+- Do NOT say "I can sense your frustration".
+- Ask ONE genuine question to understand what happened.
+- Max 3 sentences total."""
 
-    lc_messages = [
-        SystemMessage(content=emotional_prompt),
-        HumanMessage(content=state["user_message"])
-    ]
+    lc_messages = [SystemMessage(content=prompt), HumanMessage(content=state["user_message"])]
 
     full_response = ""
     async for chunk in llm.astream(lc_messages):
@@ -484,7 +556,6 @@ RULES FOR THIS RESPONSE:
             full_response += token
 
     state["final_response"] = full_response
-    print(f"[node:emotional_responder] empathy response generated")
     return state
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -493,46 +564,42 @@ RULES FOR THIS RESPONSE:
 def build_graph():
     graph = StateGraph(AgentState)
 
-    # Add all nodes
     graph.add_node("retrieve_profile", retrieve_profile)
     graph.add_node("analyze_history", analyze_history)
-    graph.add_node("emotional_detector", emotional_detector)
-    graph.add_node("router", lambda state: state)           # router is pure conditional, no logic
+    graph.add_node("smart_classifier", smart_classifier)
+    graph.add_node("router", lambda state: state)
+    graph.add_node("greeting_responder", greeting_responder)
     graph.add_node("off_topic_rejector", off_topic_rejector)
+    graph.add_node("emotional_responder", emotional_responder)
     graph.add_node("career_reasoning", career_reasoning)
     graph.add_node("resume_grounder", resume_grounder)
     graph.add_node("apply_tooling", apply_tooling)
     graph.add_node("consistency_checker", consistency_checker)
-    graph.add_node("memory_summarizer", memory_summarizer)
     graph.add_node("responder", responder)
-    graph.add_node("emotional_responder", emotional_responder)
 
-    # Linear start
     graph.set_entry_point("retrieve_profile")
     graph.add_edge("retrieve_profile", "analyze_history")
-    graph.add_edge("analyze_history", "emotional_detector")
-    graph.add_edge("emotional_detector", "router")
+    graph.add_edge("analyze_history", "smart_classifier")
+    graph.add_edge("smart_classifier", "router")
 
-    # Conditional routing
     graph.add_conditional_edges(
         "router",
         router,
         {
-            "off_topic": "off_topic_rejector",
+            "greeting": "greeting_responder",
             "emotional": "emotional_responder",
+            "off_topic": "off_topic_rejector",
             "career": "career_reasoning",
         }
     )
 
-    # Career path
     graph.add_edge("career_reasoning", "resume_grounder")
     graph.add_edge("resume_grounder", "apply_tooling")
     graph.add_edge("apply_tooling", "consistency_checker")
-    graph.add_edge("consistency_checker", "memory_summarizer")
-    graph.add_edge("memory_summarizer", "responder")
+    graph.add_edge("consistency_checker", "responder")
 
-    # All paths end
     graph.add_edge("responder", END)
+    graph.add_edge("greeting_responder", END)
     graph.add_edge("emotional_responder", END)
     graph.add_edge("off_topic_rejector", END)
 
@@ -545,7 +612,7 @@ algo_graph = build_graph()
 # ═══════════════════════════════════════════════════════════════════════════════
 @app.get("/")
 async def root():
-    return {"status": "AlgoScout LangGraph backend running — 11 nodes"}
+    return {"status": "AlgoScout LangGraph backend running — 12 nodes"}
 
 @app.get("/health")
 async def health():
@@ -578,20 +645,16 @@ async def chat(req: ChatRequest):
             "experience_tier": None,
             "skills_gap": None,
             "detected_intent": None,
-            "is_emotional": None,
-            "is_off_topic": None,
+            "detected_route": None,
             "resume_context": None,
             "career_context": None,
             "previous_conclusions": {},
-            "final_prompt": None,
             "final_response": None,
         }
 
-        # Run the graph
         final_state = await algo_graph.ainvoke(initial_state)
         final_response = final_state.get("final_response", "")
 
-        # ✅ FIX: Stream in chunks not char-by-char
         CHUNK_SIZE = 12
         for i in range(0, len(final_response), CHUNK_SIZE):
             chunk = final_response[i:i + CHUNK_SIZE]
@@ -599,7 +662,6 @@ async def chat(req: ChatRequest):
 
         yield "data: [DONE]\n\n"
 
-        # Persist to Supabase under session_id
         try:
             supabase.from_("coach_conversations").insert({
                 "user_id": req.user_id,
