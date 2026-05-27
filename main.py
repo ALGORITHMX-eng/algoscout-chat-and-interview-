@@ -1,74 +1,5 @@
 import os
 import json
-from typing import TypedDict, List, Optional
-from dotenv import load_dotenv
-from collections import Counter
-
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
-
-from langgraph.graph import StateGraph, END
-from langchain_groq import ChatGroq
-from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
-from supabase import create_client, Client
-
-load_dotenv()
-
-# ── Clients ───────────────────────────────────────────────────────────────────
-supabase: Client = create_client(
-    os.getenv("SUPABASE_URL"),
-    os.getenv("SUPABASE_SERVICE_ROLE_KEY"),
-)
-
-llm = ChatGroq(
-    api_key=os.getenv("GROQ_API_KEY"),
-    model="llama-3.3-70b-versatile",
-    temperature=0.2,
-    streaming=True,
-)
-
-app = FastAPI(title="AlgoScout LangGraph Backend")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# ── State ─────────────────────────────────────────────────────────────────────
-class AgentState(TypedDict):
-    user_id: str
-    session_id: str
-    user_message: str
-    messages: List[dict]                      # current request messages only
-    profile: Optional[dict]
-    applied_jobs: Optional[List[dict]]
-    rejected_jobs: Optional[List[dict]]
-    pending_jobs: Optional[List[dict]]
-    recent_interviews: Optional[List[dict]]
-    session_history: Optional[List[dict]]     # this session only — not cross-session
-    resume: Optional[dict]
-    experience_tier: Optional[str]
-    skills_gap: Optional[List[str]]
-    detected_intent: Optional[str]
-    is_emotional: Optional[bool]
-    is_off_topic: Optional[bool]
-    resume_context: Optional[str]             # only populated by resume_grounder
-    career_context: Optional[str]
-    previous_conclusions: Optional[dict]      # consistency checker memory
-    final_prompt: Optional[str]
-    final_response: Optional[str]
-
-class ChatRequest(BaseModel):
-    user_id: str
-    session_id: str
-    messages: List[dict]
-
-import os
-import json
 import asyncio
 from typing import TypedDict, List, Optional
 from dotenv import load_dotenv
@@ -160,8 +91,14 @@ PERSONALITY:
 - When someone asks where to do something in the app, tell them exactly where to go.
 - When someone is venting or frustrated, acknowledge it first before strategy.
 
+GROUNDING RULES (NON-NEGOTIABLE):
+- The CANDIDATE section below is the ONLY source of truth. Never add skills, tools, companies or experience not listed there.
+- If the candidate's skills list does not include PyTorch, you CANNOT mention PyTorch. Same for any tool or skill.
+- If asked about something not in their data, say "I don't have that in your profile — you can update it in Settings."
+- Never suggest a job location or role type that conflicts with their work preference and location.
+- A Nigerian candidate with "remote" preference should NEVER be matched to on-site US/EU roles. Flag it clearly if a job requires physical presence.
+
 CAREER RULES:
-- Only use data explicitly provided in this prompt. Never invent skills, companies, or history.
 - Deliver verdict first, follow up second.
 - 3 paragraphs max unless writing a full rewrite or plan.
 - No generic advice. Every sentence must trace to their actual data.
@@ -450,11 +387,20 @@ async def apply_tooling(state: AgentState) -> AgentState:
 CANDIDATE:
 Name: {profile.get('full_name', 'User')}
 Level: {tier}
-Skills: {skills}
-Target Roles: {target_roles}
-Work Preference: {profile.get('work_preference', 'remote')}
 Location: {profile.get('location', 'Not specified')}
+Work Preference: {profile.get('work_preference', 'remote')}
 Background: {profile.get('experience_summary', 'Not provided')}
+
+CONFIRMED SKILLS (ONLY these — never add others):
+{skills}
+
+TARGET ROLES:
+{target_roles}
+
+GEOGRAPHIC CONSTRAINT:
+This candidate is based in {profile.get('location', 'Nigeria')}. 
+Only recommend or discuss roles that are genuinely remote-friendly or match their work preference.
+Never suggest on-site US/EU roles unless the candidate explicitly asks.
 
 JOBS APPLIED:
 {applied_summary}
@@ -686,11 +632,7 @@ async def chat(req: ChatRequest):
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # ALGOSCOUT — INTERVIEW GRAPH
-# Add this to main.py (paste before the `if __name__ == "__main__":` line)
 # ═══════════════════════════════════════════════════════════════════════════════
-
-import json
-from typing import TypedDict, List, Optional
 
 # ── Interview State ───────────────────────────────────────────────────────────
 class InterviewState(TypedDict):
@@ -708,7 +650,7 @@ class InterviewState(TypedDict):
     running_score: float
     skills_gap: Optional[List[str]]
     last_question_topic: Optional[str]
-    difficulty: str               # "easy" | "medium" | "hard"
+    difficulty: str
     interview_context: Optional[str]
     final_response: Optional[str]
 
@@ -721,10 +663,10 @@ RULES:
 - Ask ONE question at a time. Never two.
 - Open with ONE short casual question about their day, max 8 words. No corporate warmth.
 - After they answer the small talk, say one short sentence then ask: "Can you tell me about yourself and your experience so far?"
-- After they answer that, pick your next question by pulling a specific thread from what they just said. Reference it directly — "You mentioned X, can you walk me through..."
+- After they answer that, pick your next question by pulling a specific thread from what they just said.
 - Use their skills gap to decide which threads to pull harder on.
 - If the answer is weak: probe deeper — "Can you give a specific example of that?"
-- If the answer is strong: acknowledge briefly in one sentence then pivot to a harder related topic.
+- If the answer is strong: acknowledge briefly then pivot to a harder related topic.
 - Never give hints, coaching, or feedback during the interview.
 - Never break character. You are ALGO, a human interviewer.
 - Never say you are an AI.
@@ -732,9 +674,6 @@ RULES:
 
 {interview_context}"""
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# NODE 1 — Retrieve Profile (reuse existing function signature)
-# ═══════════════════════════════════════════════════════════════════════════════
 async def interview_retrieve_profile(state: InterviewState) -> InterviewState:
     user_id = state["user_id"]
     try:
@@ -748,20 +687,14 @@ async def interview_retrieve_profile(state: InterviewState) -> InterviewState:
         state["resume"] = res.data[0] if res.data else None
     except:
         state["resume"] = None
-    print(f"[interview:retrieve_profile] {state['profile'].get('full_name', 'unknown')}")
     return state
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# NODE 2 — Load Job Context
-# ═══════════════════════════════════════════════════════════════════════════════
 async def load_job_context(state: InterviewState) -> InterviewState:
     try:
         res = supabase.from_("jobs").select("*").eq("id", state["job_id"]).single().execute()
         state["job"] = res.data or {}
     except:
         state["job"] = {}
-
-    # Extract skills gap from score_breakdown
     job = state["job"]
     skills_gap = []
     if job.get("score_breakdown"):
@@ -771,48 +704,28 @@ async def load_job_context(state: InterviewState) -> InterviewState:
         except:
             pass
     state["skills_gap"] = skills_gap
-    print(f"[interview:load_job_context] job={job.get('role')} gaps={skills_gap}")
     return state
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# NODE 3 — Load Interview State (question count, difficulty, score)
-# ═══════════════════════════════════════════════════════════════════════════════
 async def load_interview_state(state: InterviewState) -> InterviewState:
-    # Count how many questions have been asked so far
     assistant_msgs = [m for m in state["messages"] if m["role"] == "assistant"]
     state["question_count"] = len(assistant_msgs)
-
-    # Calculate difficulty based on running score
     score = state.get("running_score", 5.0)
-    if score >= 7.5:
-        state["difficulty"] = "hard"
-    elif score >= 5.0:
-        state["difficulty"] = "medium"
-    else:
-        state["difficulty"] = "easy"
-
-    print(f"[interview:load_interview_state] q={state['question_count']} difficulty={state['difficulty']}")
+    if score >= 7.5: state["difficulty"] = "hard"
+    elif score >= 5.0: state["difficulty"] = "medium"
+    else: state["difficulty"] = "easy"
     return state
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# NODE 4 — Answer Evaluator (scores user's last answer 1-10)
-# ═══════════════════════════════════════════════════════════════════════════════
 async def answer_evaluator(state: InterviewState) -> InterviewState:
-    # Only evaluate if there's a previous user message (not the first turn)
     user_msgs = [m for m in state["messages"] if m["role"] == "user"]
     if len(user_msgs) < 1:
         state["running_score"] = 5.0
         return state
-
     last_answer = user_msgs[-1]["content"]
     job = state["job"] or {}
-
     eval_prompt = f"""Rate this interview answer for a {job.get('role', 'technical')} role on a scale of 1-10.
 Answer: "{last_answer}"
 Job requires: {job.get('raw_text', '')[:500]}
-
 Respond with ONLY a number between 1 and 10. Nothing else."""
-
     try:
         eval_res = await llm.ainvoke([
             SystemMessage(content="You are an interview evaluator. Respond with only a number."),
@@ -820,36 +733,21 @@ Respond with ONLY a number between 1 and 10. Nothing else."""
         ])
         score = float(eval_res.content.strip().split()[0])
         score = max(1.0, min(10.0, score))
-        # Running average
         prev_score = state.get("running_score", 5.0)
         q_count = state["question_count"]
         state["running_score"] = (prev_score * q_count + score) / (q_count + 1)
     except:
         state["running_score"] = state.get("running_score", 5.0)
-
-    print(f"[interview:answer_evaluator] running_score={state['running_score']:.1f}")
     return state
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# NODE 5 — Question Router
-# ═══════════════════════════════════════════════════════════════════════════════
 def interview_router(state: InterviewState) -> str:
     duration = state.get("duration_minutes", 15)
-    # Approx questions for duration (~0.7 per minute)
     max_questions = {5: 4, 10: 7, 15: 10, 20: 14, 30: 20}.get(duration, 10)
-
-    if state["question_count"] >= max_questions:
-        return "end"
-
+    if state["question_count"] >= max_questions: return "end"
     score = state.get("running_score", 5.0)
-    if score < 4.0:
-        return "probe"  # dig deeper on same topic
-    else:
-        return "next"   # move to next topic
+    if score < 4.0: return "probe"
+    return "next"
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# NODE 6 — Build Interview Context
-# ═══════════════════════════════════════════════════════════════════════════════
 async def build_interview_context(state: InterviewState) -> InterviewState:
     profile = state["profile"] or {}
     job = state["job"] or {}
@@ -857,47 +755,32 @@ async def build_interview_context(state: InterviewState) -> InterviewState:
     skills_gap = state.get("skills_gap") or []
     difficulty = state.get("difficulty", "medium")
     route = interview_router(state)
-
     resume_json = resume.get("tailored_json", {}) if resume else {}
     skills = ", ".join(profile.get("skills", []) or resume_json.get("skills", []))
-
     gap_instruction = ""
     if skills_gap:
-        gap_instruction = f"\nPRIORITY TOPICS (gaps identified in their application): {', '.join(skills_gap[:5])}\nMake sure to probe these areas."
-
+        gap_instruction = f"\nPRIORITY TOPICS (gaps): {', '.join(skills_gap[:5])}\nProbe these areas."
     route_instruction = {
-        "probe": "Their last answer was weak. Ask a follow-up that probes deeper on the same topic. Don't move on yet.",
-        "next": f"Move to the next topic. Difficulty level: {difficulty}. Ask something that requires depth.",
-        "end": "Wrap up the interview professionally. Thank them and say you'll be in touch.",
+        "probe": "Their last answer was weak. Probe deeper on same topic.",
+        "next": f"Move to next topic. Difficulty: {difficulty}. Ask something requiring depth.",
+        "end": "Wrap up professionally. Thank them and say you'll be in touch.",
     }.get(route, "")
-
     duration = state.get("duration_minutes", 15)
     max_questions = {5: 4, 10: 7, 15: 10, 20: 14, 30: 20}.get(duration, 10)
-
     state["interview_context"] = f"""
 JOB: {job.get('role', 'Unknown')} at {job.get('company', 'Unknown')}
 DESCRIPTION: {(job.get('raw_text') or '')[:1000]}
-
 CANDIDATE SKILLS: {skills}
 EXPERIENCE: {profile.get('experience_summary', 'Not provided')}
 {gap_instruction}
-
 SESSION: Question {state['question_count'] + 1} of {max_questions} · Difficulty: {difficulty}
 INSTRUCTION: {route_instruction}
 """.strip()
-
-    print(f"[interview:build_interview_context] route={route} difficulty={difficulty}")
     return state
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# NODE 7 — Session Saver
-# ═══════════════════════════════════════════════════════════════════════════════
 async def interview_session_saver(state: InterviewState) -> InterviewState:
     try:
-        # Upsert session
-        existing = supabase.from_("interview_sessions").select("id") \
-            .eq("id", state["session_id"]).execute()
-
+        existing = supabase.from_("interview_sessions").select("id").eq("id", state["session_id"]).execute()
         if existing.data:
             supabase.from_("interview_sessions").update({
                 "messages": state["messages"],
@@ -916,15 +799,11 @@ async def interview_session_saver(state: InterviewState) -> InterviewState:
         print(f"[interview:session_saver] error: {e}")
     return state
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# NODE 8 — Interview Responder
-# ═══════════════════════════════════════════════════════════════════════════════
 async def interview_responder(state: InterviewState) -> InterviewState:
     profile = state["profile"] or {}
     job = state["job"] or {}
     duration = state.get("duration_minutes", 15)
     max_questions = {5: 4, 10: 7, 15: 10, 20: 14, 30: 20}.get(duration, 10)
-
     system_prompt = INTERVIEW_IDENTITY.format(
         company=job.get("company", "the company"),
         name=profile.get("full_name", "candidate").split()[0],
@@ -932,43 +811,30 @@ async def interview_responder(state: InterviewState) -> InterviewState:
         max_questions=max_questions,
         interview_context=state.get("interview_context", ""),
     )
-
     lc_messages = [SystemMessage(content=system_prompt)]
-    for m in state["messages"][-12:]:  # last 12 messages for context
+    for m in state["messages"][-12:]:
         if m["role"] == "user":
-            # Replace hidden trigger with actual opening instruction
-            
-            
             content = m["content"]
             if content == "__ALGO_START__":
                 content = (
                     "Greet the candidate by first name only. "
                     "Say your name is ALGO and you're from the company. "
                     "Ask how their day is going — ONE short casual question, max 8 words. "
-                    "Total response: 2 sentences max. No fluff, no wishes, no corporate warmth. "
-                    "Sound like a real person, not a chatbot."
+                    "Total response: 2 sentences max. Sound like a real person."
                 )
             lc_messages.append(HumanMessage(content=content))
         elif m["role"] == "assistant":
             lc_messages.append(AIMessage(content=m["content"]))
-            
-
     full_response = ""
     async for chunk in llm.astream(lc_messages):
         token = chunk.content
         if token:
             full_response += token
-
     state["final_response"] = full_response
-    print(f"[interview:responder] response_len={len(full_response)}")
     return state
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Build Interview Graph
-# ═══════════════════════════════════════════════════════════════════════════════
 def build_interview_graph():
     graph = StateGraph(InterviewState)
-
     graph.add_node("retrieve_profile", interview_retrieve_profile)
     graph.add_node("load_job_context", load_job_context)
     graph.add_node("load_interview_state", load_interview_state)
@@ -976,7 +842,6 @@ def build_interview_graph():
     graph.add_node("build_context", build_interview_context)
     graph.add_node("session_saver", interview_session_saver)
     graph.add_node("responder", interview_responder)
-
     graph.set_entry_point("retrieve_profile")
     graph.add_edge("retrieve_profile", "load_job_context")
     graph.add_edge("load_job_context", "load_interview_state")
@@ -985,14 +850,10 @@ def build_interview_graph():
     graph.add_edge("build_context", "session_saver")
     graph.add_edge("session_saver", "responder")
     graph.add_edge("responder", END)
-
     return graph.compile()
 
 interview_graph = build_interview_graph()
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# /interview endpoint
-# ═══════════════════════════════════════════════════════════════════════════════
 class InterviewRequest(BaseModel):
     user_id: str
     session_id: str
@@ -1005,56 +866,32 @@ class InterviewRequest(BaseModel):
 async def interview(req: InterviewRequest):
     if not req.user_id or not req.job_id:
         raise HTTPException(status_code=400, detail="user_id and job_id required")
-
-    
     last_user_msg = next(
-    (m["content"] for m in reversed(req.messages) if m["role"] == "user"), ""
+        (m["content"] for m in reversed(req.messages) if m["role"] == "user"), ""
     )
     if not last_user_msg:
         raise HTTPException(status_code=400, detail="No user message found")
-
     async def stream_response():
         state: InterviewState = {
-            "user_id": req.user_id,
-            "session_id": req.session_id,
-            "job_id": req.job_id,
-            "user_message": last_user_msg,
-            "messages": req.messages,
-            "profile": None,
-            "job": None,
-            "resume": None,
-            "question_count": 0,
+            "user_id": req.user_id, "session_id": req.session_id,
+            "job_id": req.job_id, "user_message": last_user_msg,
+            "messages": req.messages, "profile": None, "job": None,
+            "resume": None, "question_count": 0,
             "duration_minutes": req.duration_minutes or 15,
-            "elapsed_seconds": 0,
-            "running_score": req.running_score or 5.0,
-            "skills_gap": None,
-            "last_question_topic": None,
-            "difficulty": "medium",
-            "interview_context": None,
-            "final_response": None,
+            "elapsed_seconds": 0, "running_score": req.running_score or 5.0,
+            "skills_gap": None, "last_question_topic": None,
+            "difficulty": "medium", "interview_context": None, "final_response": None,
         }
-
         final_state = await interview_graph.ainvoke(state)
         final_response = final_state.get("final_response", "")
-
-        # Chunk-based streaming
         CHUNK_SIZE = 12
         for i in range(0, len(final_response), CHUNK_SIZE):
             chunk = final_response[i:i + CHUNK_SIZE]
             yield f"data: {json.dumps({'choices': [{'delta': {'content': chunk}}]})}\n\n"
-
         yield "data: [DONE]\n\n"
+    return StreamingResponse(stream_response(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
-    return StreamingResponse(
-        stream_response(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# /interview/feedback endpoint
-# ═══════════════════════════════════════════════════════════════════════════════
 class FeedbackRequest(BaseModel):
     user_id: str
     job_id: str
@@ -1064,57 +901,41 @@ class FeedbackRequest(BaseModel):
 @app.post("/interview/feedback")
 async def interview_feedback(req: FeedbackRequest):
     try:
-        # Fetch job for context
         job_res = supabase.from_("jobs").select("role, company").eq("id", req.job_id).single().execute()
         job = job_res.data or {}
-
         transcript = "\n\n".join([
             f"[{m['role'].upper()}]: {m['content']}"
             for m in req.messages
             if m.get("content") and m["content"] != "__ALGO_START__"
         ])
-
-        feedback_prompt = f"""You are an expert interview coach. Analyze this {job.get('role', 'technical')} interview transcript for {job.get('company', 'the company')}.
-
+        feedback_prompt = f"""You are an expert interview coach. Analyze this {job.get('role', 'technical')} interview for {job.get('company', 'the company')}.
 TRANSCRIPT:
 {transcript}
-
-Return ONLY valid JSON (no markdown, no extra text):
+Return ONLY valid JSON:
 {{
   "overall_score": <0-100>,
   "overall_verdict": "<one sentence>",
   "sections": [
-    {{"category": "Communication", "score": <0-100>, "strength": "<what they did well>", "improvement": "<what to fix>"}},
-    {{"category": "Technical Knowledge", "score": <0-100>, "strength": "<what they did well>", "improvement": "<what to fix>"}},
-    {{"category": "Confidence & Delivery", "score": <0-100>, "strength": "<what they did well>", "improvement": "<what to fix>"}},
-    {{"category": "Relevance of Answers", "score": <0-100>, "strength": "<what they did well>", "improvement": "<what to fix>"}},
-    {{"category": "Storytelling & Examples", "score": <0-100>, "strength": "<what they did well>", "improvement": "<what to fix>"}}
+    {{"category": "Communication", "score": <0-100>, "strength": "<str>", "improvement": "<str>"}},
+    {{"category": "Technical Knowledge", "score": <0-100>, "strength": "<str>", "improvement": "<str>"}},
+    {{"category": "Confidence & Delivery", "score": <0-100>, "strength": "<str>", "improvement": "<str>"}},
+    {{"category": "Relevance of Answers", "score": <0-100>, "strength": "<str>", "improvement": "<str>"}},
+    {{"category": "Storytelling & Examples", "score": <0-100>, "strength": "<str>", "improvement": "<str>"}}
   ],
-  "top_strengths": ["<strength 1>", "<strength 2>", "<strength 3>"],
-  "critical_gaps": ["<gap 1>", "<gap 2>", "<gap 3>"],
-  "recommended_drills": [
-    {{"drill": "<name>", "why": "<reason>", "how": "<practice method>"}}
-  ],
+  "top_strengths": ["<s1>", "<s2>", "<s3>"],
+  "critical_gaps": ["<g1>", "<g2>", "<g3>"],
+  "recommended_drills": [{{"drill": "<name>", "why": "<reason>", "how": "<method>"}}],
   "hire_likelihood": "<Strong Yes | Yes | Maybe | No>",
-  "coach_note": "<motivational closing note>"
+  "coach_note": "<motivational note>"
 }}"""
-
-        feedback_llm = ChatGroq(
-            api_key=os.getenv("GROQ_API_KEY"),
-            model="llama-3.3-70b-versatile",
-            temperature=0.3,
-            streaming=False,
-        )
-
+        feedback_llm = ChatGroq(api_key=os.getenv("GROQ_API_KEY"),
+            model="llama-3.3-70b-versatile", temperature=0.3, streaming=False)
         response = await feedback_llm.ainvoke([
             SystemMessage(content="You are an interview evaluator. Return only valid JSON."),
             HumanMessage(content=feedback_prompt),
         ])
-
         raw = response.content.strip().replace("```json", "").replace("```", "").strip()
         feedback = json.loads(raw)
-
-        # Save to Supabase
         try:
             supabase.from_("interview_sessions").update({
                 "feedback": feedback,
@@ -1123,13 +944,11 @@ Return ONLY valid JSON (no markdown, no extra text):
             }).eq("id", req.session_id).execute()
         except Exception as e:
             print(f"[feedback] save error: {e}")
-
         return {"success": True, "feedback": feedback}
-
     except Exception as e:
         print(f"[feedback] error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-        
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
