@@ -1,6 +1,7 @@
 import os
 import json
 import asyncio
+import datetime
 from typing import TypedDict, List, Optional, Any
 from dotenv import load_dotenv
 from collections import Counter
@@ -368,6 +369,7 @@ Return ONLY the JSON. No explanation."""
         }
         print(f"[node:profile_update_detector] field={field} proposed={proposed}")
     except Exception as e:
+        await log_event("error", f"Chat save failed: {str(e)}", "chat_endpoint")
         print(f"[node:profile_update_detector] error: {e}")
         state["profile_update"] = None
 
@@ -683,9 +685,37 @@ algo_graph = build_graph()
 async def root():
     return {"status": "AlgoScout LangGraph backend running — 14 nodes"}
 
+
+async def log_event(type: str, message: str, source: str, metadata: dict = {}):
+    try:
+        supabase.from_("monitor_logs").insert({
+            "type": type,
+            "message": message,
+            "source": source,
+            "metadata": metadata,
+        }).execute()
+    except Exception as e:
+        print(f"[monitor] failed to log: {e}")
+        await log_event("error", f"Chat save failed: {str(e)}", "chat_endpoint")
+
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    groq_ok = True
+    supabase_ok = True
+    try:
+        supabase.from_("profiles").select("id").limit(1).execute()
+    except:
+        supabase_ok = False
+        await log_event("error", "Supabase unreachable", "health_endpoint")
+
+    status = "ok" if groq_ok and supabase_ok else "degraded"
+    return {
+        "status": status,
+        "groq": groq_ok,
+        "supabase": supabase_ok,
+        "timestamp": datetime.datetime.utcnow().isoformat(),
+    }
+   
 
 @app.post("/chat")
 async def chat(req: ChatRequest):
@@ -763,6 +793,7 @@ async def chat(req: ChatRequest):
             }).execute()
         except Exception as e:
             print(f"[chat] save error: {e}")
+            await log_event("error", f"Chat save failed: {str(e)}", "chat_endpoint")
 
     return StreamingResponse(
         stream_response(),
@@ -787,6 +818,7 @@ async def update_profile(req: ProfileUpdateRequest):
         ).eq("user_id", req.user_id).execute()
         return {"success": True, "field": req.field, "value": req.value}
     except Exception as e:
+        await log_event("error", f"Chat save failed: {str(e)}", "chat_endpoint")
         raise HTTPException(status_code=500, detail=str(e))
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -950,6 +982,7 @@ async def interview_session_saver(state: InterviewState) -> InterviewState:
             }).execute()
     except Exception as e:
         print(f"[interview:session_saver] error: {e}")
+        await log_event("error", f"Session save failed: {str(e)}", "interview_session_saver")
     return state
 
 async def interview_responder(state: InterviewState) -> InterviewState:
@@ -1099,9 +1132,11 @@ Return ONLY valid JSON:
             }).eq("id", req.session_id).execute()
         except Exception as e:
             print(f"[feedback] save error: {e}")
+            await log_event("error", f"Chat save failed: {str(e)}", "chat_endpoint")
         return {"success": True, "feedback": feedback}
     except Exception as e:
         print(f"[feedback] error: {e}")
+        await log_event("error", f"Feedback generation failed: {str(e)}", "feedback_endpoint")
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
