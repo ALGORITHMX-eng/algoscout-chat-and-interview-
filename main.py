@@ -1,7 +1,7 @@
 import os
 import json
 import asyncio
-from typing import TypedDict, List, Optional
+from typing import TypedDict, List, Optional, Any
 from dotenv import load_dotenv
 from collections import Counter
 
@@ -61,6 +61,7 @@ class AgentState(TypedDict):
     resume_context: Optional[str]
     career_context: Optional[str]
     previous_conclusions: Optional[dict]
+    profile_update: Optional[dict]
     final_response: Optional[str]
 
 class ChatRequest(BaseModel):
@@ -68,7 +69,7 @@ class ChatRequest(BaseModel):
     session_id: str
     messages: List[dict]
 
-# ── AlgoScout App Navigation Map ─────────────────────────────────────────────
+# ── App Navigation ────────────────────────────────────────────────────────────
 APP_NAVIGATION = """
 ALGOSCOUT APP NAVIGATION (use this to direct users):
 - Dashboard → view and manage all job leads, approve/reject jobs
@@ -91,6 +92,14 @@ PERSONALITY:
 - When someone asks where to do something in the app, tell them exactly where to go.
 - When someone is venting or frustrated, acknowledge it first before strategy.
 
+CONTACT / SUPPORT:
+Your support email is: algorithmengineer4@gmail.com
+Share it ONLY in these 3 situations:
+1. User directly asks for contact, email, support, or how to reach the team
+2. User reports a bug or something broken in the app
+3. User is clearly frustrated and seems about to leave or give up on the product
+Never drop the email randomly in conversation.
+
 GROUNDING RULES (NON-NEGOTIABLE):
 - The CANDIDATE section below is the ONLY source of truth. Never add skills, tools, companies or experience not listed there.
 - If the candidate's skills list does not include PyTorch, you CANNOT mention PyTorch. Same for any tool or skill.
@@ -110,12 +119,24 @@ OFF-TOPIC RULE:
 - Everything else career-related, app-related, or conversational is fair game.
 """
 
+# ── Updatable profile fields ──────────────────────────────────────────────────
+UPDATABLE_FIELDS = {
+    "skills":             {"label": "Skills",              "supabase_field": "skills",             "type": "array"},
+    "preferred_titles":   {"label": "Target Roles",        "supabase_field": "preferred_titles",    "type": "array"},
+    "years_experience":   {"label": "Years of Experience", "supabase_field": "years_experience",    "type": "number"},
+    "work_preference":    {"label": "Work Preference",     "supabase_field": "work_preference",     "type": "string"},
+    "location":           {"label": "Location",            "supabase_field": "location",            "type": "string"},
+    "experience_summary": {"label": "Bio / Summary",       "supabase_field": "experience_summary",  "type": "string"},
+    "linkedin":           {"label": "LinkedIn",            "supabase_field": "linkedin",            "type": "string"},
+    "github":             {"label": "GitHub",              "supabase_field": "github",              "type": "string"},
+    "portfolio":          {"label": "Portfolio URL",       "supabase_field": "portfolio",           "type": "string"},
+}
+
 # ═══════════════════════════════════════════════════════════════════════════════
-# NODE 1 — Retrieve Profile + History (parallelized)
+# NODE 1 — Retrieve Profile + Resume (parallelized)
 # ═══════════════════════════════════════════════════════════════════════════════
 async def retrieve_profile(state: AgentState) -> AgentState:
     user_id = state["user_id"]
-    session_id = state["session_id"]
 
     def fetch_profile():
         try:
@@ -187,6 +208,7 @@ async def analyze_history(state: AgentState) -> AgentState:
     state["previous_conclusions"] = (conclusions_res.data.get("conclusions", {}) if conclusions_res and conclusions_res.data else {})
     state["rejected_jobs"] = []
     state["recent_interviews"] = []
+    state["profile_update"] = None
 
     all_missing = []
     for job in state["applied_jobs"]:
@@ -211,11 +233,12 @@ async def smart_classifier(state: AgentState) -> AgentState:
 - "greeting" → casual hello, hi, hey, what's up, how are you, good morning — small talk with no specific request
 - "emotional" → user is frustrated, sad, giving up, venting about job search, feeling hopeless
 - "off_topic" → requests for coding help (write code, debug, script), recipes, weather, news, sports scores, creative writing unrelated to career
+- "profile_update" → user wants to add, update, change, or remove something from their profile: skills, target roles, years of experience, work preference, location, bio/summary, LinkedIn, GitHub, portfolio
 - "career" → everything else: job questions, resume help, interview prep, salary, skills, app navigation, AlgoScout features, career strategy
 
 Message: "{msg}"
 
-Reply with ONLY one word: greeting, emotional, off_topic, or career"""
+Reply with ONLY one word: greeting, emotional, off_topic, profile_update, or career"""
 
     try:
         result = await llm.ainvoke([
@@ -223,7 +246,7 @@ Reply with ONLY one word: greeting, emotional, off_topic, or career"""
             HumanMessage(content=classify_prompt)
         ])
         category = result.content.strip().lower().split()[0]
-        if category in ["greeting", "emotional", "off_topic", "career"]:
+        if category in ["greeting", "emotional", "off_topic", "profile_update", "career"]:
             state["detected_route"] = category
         else:
             state["detected_route"] = "career"
@@ -233,22 +256,20 @@ Reply with ONLY one word: greeting, emotional, off_topic, or career"""
     print(f"[node:smart_classifier] route={state['detected_route']} msg='{msg[:50]}'")
     return state
 
-# ── Router function (reads from state) ────────────────────────────────────────
+# ── Router ────────────────────────────────────────────────────────────────────
 def router(state: AgentState) -> str:
     return state.get("detected_route", "career")
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# NODE 4 — Greeting Responder (no career data needed)
+# NODE 4 — Greeting Responder
 # ═══════════════════════════════════════════════════════════════════════════════
 async def greeting_responder(state: AgentState) -> AgentState:
     profile = state["profile"] or {}
     name = profile.get("full_name", "").split()[0] if profile.get("full_name") else ""
 
-    greeting_prompt = f"""You are ALGO — a warm, smart career assistant inside the AlgoScout app.
+    prompt = f"""You are ALGO — a warm, smart career assistant inside the AlgoScout app.
 {"The user's name is " + name + "." if name else ""}
-
 The user just sent a casual greeting or small talk message.
-
 RULES:
 - Greet them back warmly and naturally. Use their name if you have it.
 - Ask how they're doing or what's on their mind — ONE short question.
@@ -256,19 +277,12 @@ RULES:
 - Do NOT say "I'm here to help with your career" or any corporate opening.
 - Max 2 sentences. Sound like a real person."""
 
-    lc_messages = [
-        SystemMessage(content=greeting_prompt),
-        HumanMessage(content=state["user_message"])
-    ]
-
     full_response = ""
-    async for chunk in llm.astream(lc_messages):
-        token = chunk.content
-        if token:
-            full_response += token
+    async for chunk in llm.astream([SystemMessage(content=prompt), HumanMessage(content=state["user_message"])]):
+        if chunk.content:
+            full_response += chunk.content
 
     state["final_response"] = full_response
-    print(f"[node:greeting_responder] done")
     return state
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -279,11 +293,119 @@ async def off_topic_rejector(state: AgentState) -> AgentState:
         "That's outside what I do — try Claude.ai or ChatGPT for that. "
         "Anything career-wise I can help with?"
     )
-    print("[node:off_topic_rejector] blocked")
     return state
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# NODE 6 — Career Reasoning (seniority + intent)
+# NODE 6 — Profile Update Detector
+# ═══════════════════════════════════════════════════════════════════════════════
+async def profile_update_detector(state: AgentState) -> AgentState:
+    profile = state["profile"] or {}
+    msg = state["user_message"]
+
+    extract_prompt = f"""The user wants to update their career profile.
+Extract what they want to change and return ONLY valid JSON.
+
+CURRENT PROFILE:
+skills: {profile.get('skills', [])}
+preferred_titles: {profile.get('preferred_titles', [])}
+years_experience: {profile.get('years_experience', 0)}
+work_preference: {profile.get('work_preference', '')}
+location: {profile.get('location', '')}
+experience_summary: {profile.get('experience_summary', '')}
+linkedin: {profile.get('linkedin', '')}
+github: {profile.get('github', '')}
+portfolio: {profile.get('portfolio', '')}
+
+USER MESSAGE: "{msg}"
+
+Return JSON:
+{{
+  "field": "<one of: skills, preferred_titles, years_experience, work_preference, location, experience_summary, linkedin, github, portfolio>",
+  "proposed": <new value — array for skills/preferred_titles, number for years_experience, string for others>,
+  "action_type": "<add | remove | replace>",
+  "understood": "<one sentence confirming what you understood>"
+}}
+
+For "add" to array fields: merge new items with existing.
+For "remove" from array fields: remove specified items from existing.
+For "replace": use new value directly.
+Return ONLY the JSON. No explanation."""
+
+    try:
+        result = await llm.ainvoke([
+            SystemMessage(content="You extract profile update intentions. Return only valid JSON."),
+            HumanMessage(content=extract_prompt)
+        ])
+        raw = result.content.strip().replace("```json", "").replace("```", "").strip()
+        parsed = json.loads(raw)
+        field = parsed.get("field")
+
+        if field not in UPDATABLE_FIELDS:
+            state["profile_update"] = None
+            return state
+
+        field_meta = UPDATABLE_FIELDS[field]
+        current = profile.get(field)
+        proposed = parsed.get("proposed")
+
+        # Handle array merge/remove
+        if field_meta["type"] == "array":
+            current_list = list(current or [])
+            if parsed.get("action_type") == "add":
+                new_items = proposed if isinstance(proposed, list) else [proposed]
+                proposed = list(dict.fromkeys(current_list + new_items))
+            elif parsed.get("action_type") == "remove":
+                remove_items = proposed if isinstance(proposed, list) else [proposed]
+                proposed = [x for x in current_list if x not in remove_items]
+
+        state["profile_update"] = {
+            "field": field,
+            "supabase_field": field_meta["supabase_field"],
+            "field_label": field_meta["label"],
+            "current": current,
+            "proposed": proposed,
+            "understood": parsed.get("understood", ""),
+        }
+        print(f"[node:profile_update_detector] field={field} proposed={proposed}")
+    except Exception as e:
+        print(f"[node:profile_update_detector] error: {e}")
+        state["profile_update"] = None
+
+    return state
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# NODE 7 — Profile Update Responder
+# ═══════════════════════════════════════════════════════════════════════════════
+async def profile_update_responder(state: AgentState) -> AgentState:
+    update = state.get("profile_update")
+    if not update:
+        state["final_response"] = "I couldn't figure out what you wanted to update. Try being more specific — for example: 'Add React to my skills' or 'Update my location to Lagos'."
+        return state
+
+    profile = state["profile"] or {}
+    name = profile.get("full_name", "").split()[0] if profile.get("full_name") else ""
+
+    prompt = f"""You are ALGO, a career assistant.
+The user wants to update their profile. Confirm what you understood in ONE natural sentence, then say you've prepared the change below for their review.
+Say "I've prepared the change for you to review" — NOT "I'll update".
+{"User's name is " + name + "." if name else ""}
+What they want: {update['understood']}
+Field: {update['field_label']}
+Max 2 sentences. Sound like a real person."""
+
+    try:
+        result = await llm.ainvoke([
+            SystemMessage(content="You confirm profile update intentions briefly."),
+            HumanMessage(content=prompt)
+        ])
+        state["final_response"] = result.content.strip()
+    except:
+        state["final_response"] = f"Got it — I've prepared the change to your {update['field_label']} for you to review below."
+
+    return state
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# NODE 8 — Career Reasoning (seniority + intent)
 # ═══════════════════════════════════════════════════════════════════════════════
 async def career_reasoning(state: AgentState) -> AgentState:
     profile = state["profile"]
@@ -310,7 +432,7 @@ async def career_reasoning(state: AgentState) -> AgentState:
         intent = "rejection_support"
     elif any(w in msg for w in ["position", "realistic", "candidate", "angle", "chance", "apply", "stand"]):
         intent = "positioning_strategy"
-    elif any(w in msg for w in ["where", "how do i", "settings", "profile", "update", "change", "find", "navigate"]):
+    elif any(w in msg for w in ["where", "how do i", "settings", "profile", "find", "navigate"]):
         intent = "app_navigation"
     else:
         intent = "general_career"
@@ -320,7 +442,7 @@ async def career_reasoning(state: AgentState) -> AgentState:
     return state
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# NODE 7 — Resume Grounder
+# NODE 9 — Resume Grounder
 # ═══════════════════════════════════════════════════════════════════════════════
 async def resume_grounder(state: AgentState) -> AgentState:
     resume_relevant_intents = ["resume_help", "cover_letter", "positioning_strategy", "general_career"]
@@ -346,7 +468,7 @@ Experience:
     return state
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# NODE 8 — Apply Tooling (build career context)
+# NODE 10 — Apply Tooling (build career context)
 # ═══════════════════════════════════════════════════════════════════════════════
 async def apply_tooling(state: AgentState) -> AgentState:
     profile = state["profile"]
@@ -375,11 +497,11 @@ async def apply_tooling(state: AgentState) -> AgentState:
         "resume_help": "Rewrite their bullets now. Don't ask — just do it. Show BEFORE and AFTER. Name exactly what was weak.",
         "cover_letter": "Write the full cover letter now. Use their most recent applied job as context.",
         "interview_prep": "Give 3 hard, role-specific questions at their experience level. Answer one yourself as a model.",
-        "learning_path": "Don't give a rigid 30-day plan. Pick ONE skill from their gap that matches what companies in their applied jobs actually want. Tell them exactly what to build with it — a specific mini project. One skill, one project, concrete outcome. Not a syllabus.",
+        "learning_path": "Pick ONE skill from their gap that matches what companies in their applied jobs actually want. Tell them exactly what to build with it — a specific mini project. One skill, one project, concrete outcome.",
         "salary_negotiation": "Give exact salary ranges for their role and level. Tell them word-for-word what to say.",
         "rejection_support": "One sentence acknowledging it. Then diagnose the real reason using their data. Then 3 specific fixes.",
         "positioning_strategy": "Give a direct verdict. No hedging. Reference session history if one exists.",
-        "app_navigation": "Tell them exactly where to go in the app. Be specific — Dashboard, Profile tab, Interview tab, Settings, Add Job button. Don't be vague.",
+        "app_navigation": "Tell them exactly where to go in the app. Be specific — Dashboard, Profile tab, Interview tab, Settings, Add Job button.",
         "general_career": "Answer using their actual data. Reference real skills, companies, scores. No generic advice.",
     }.get(intent, "")
 
@@ -398,7 +520,7 @@ TARGET ROLES:
 {target_roles}
 
 GEOGRAPHIC CONSTRAINT:
-This candidate is based in {profile.get('location', 'Nigeria')}. 
+This candidate is based in {profile.get('location', 'Nigeria')}.
 Only recommend or discuss roles that are genuinely remote-friendly or match their work preference.
 Never suggest on-site US/EU roles unless the candidate explicitly asks.
 
@@ -423,7 +545,7 @@ INSTRUCTION: {intent_instructions}
     return state
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# NODE 9 — Consistency Checker
+# NODE 11 — Consistency Checker
 # ═══════════════════════════════════════════════════════════════════════════════
 async def consistency_checker(state: AgentState) -> AgentState:
     conclusions = state.get("previous_conclusions", {})
@@ -448,7 +570,7 @@ async def consistency_checker(state: AgentState) -> AgentState:
     return state
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# NODE 10 — Responder (career path LLM call)
+# NODE 12 — Responder (career path LLM call)
 # ═══════════════════════════════════════════════════════════════════════════════
 async def responder(state: AgentState) -> AgentState:
     system = IDENTITY_PROMPT.format(app_navigation=APP_NAVIGATION)
@@ -468,16 +590,15 @@ async def responder(state: AgentState) -> AgentState:
 
     full_response = ""
     async for chunk in llm.astream(lc_messages):
-        token = chunk.content
-        if token:
-            full_response += token
+        if chunk.content:
+            full_response += chunk.content
 
     state["final_response"] = full_response
     print(f"[node:responder] len={len(full_response)}")
     return state
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# NODE 11 — Emotional Responder
+# NODE 13 — Emotional Responder
 # ═══════════════════════════════════════════════════════════════════════════════
 async def emotional_responder(state: AgentState) -> AgentState:
     profile = state["profile"] or {}
@@ -485,7 +606,6 @@ async def emotional_responder(state: AgentState) -> AgentState:
 
     prompt = f"""You are ALGO — a career assistant who actually cares.
 {"User's name is " + name + "." if name else ""}
-
 RULES:
 - Acknowledge the emotion in ONE sentence. Be human, not corporate.
 - No bullet points. No headers. No action items yet.
@@ -493,19 +613,16 @@ RULES:
 - Ask ONE genuine question to understand what happened.
 - Max 3 sentences total."""
 
-    lc_messages = [SystemMessage(content=prompt), HumanMessage(content=state["user_message"])]
-
     full_response = ""
-    async for chunk in llm.astream(lc_messages):
-        token = chunk.content
-        if token:
-            full_response += token
+    async for chunk in llm.astream([SystemMessage(content=prompt), HumanMessage(content=state["user_message"])]):
+        if chunk.content:
+            full_response += chunk.content
 
     state["final_response"] = full_response
     return state
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Build the Graph
+# Build the Chat Graph
 # ═══════════════════════════════════════════════════════════════════════════════
 def build_graph():
     graph = StateGraph(AgentState)
@@ -517,6 +634,8 @@ def build_graph():
     graph.add_node("greeting_responder", greeting_responder)
     graph.add_node("off_topic_rejector", off_topic_rejector)
     graph.add_node("emotional_responder", emotional_responder)
+    graph.add_node("profile_update_detector", profile_update_detector)
+    graph.add_node("profile_update_responder", profile_update_responder)
     graph.add_node("career_reasoning", career_reasoning)
     graph.add_node("resume_grounder", resume_grounder)
     graph.add_node("apply_tooling", apply_tooling)
@@ -535,9 +654,13 @@ def build_graph():
             "greeting": "greeting_responder",
             "emotional": "emotional_responder",
             "off_topic": "off_topic_rejector",
+            "profile_update": "profile_update_detector",
             "career": "career_reasoning",
         }
     )
+
+    graph.add_edge("profile_update_detector", "profile_update_responder")
+    graph.add_edge("profile_update_responder", END)
 
     graph.add_edge("career_reasoning", "resume_grounder")
     graph.add_edge("resume_grounder", "apply_tooling")
@@ -554,11 +677,11 @@ def build_graph():
 algo_graph = build_graph()
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# API
+# API — Chat
 # ═══════════════════════════════════════════════════════════════════════════════
 @app.get("/")
 async def root():
-    return {"status": "AlgoScout LangGraph backend running — 12 nodes"}
+    return {"status": "AlgoScout LangGraph backend running — 14 nodes"}
 
 @app.get("/health")
 async def health():
@@ -595,6 +718,7 @@ async def chat(req: ChatRequest):
             "resume_context": None,
             "career_context": None,
             "previous_conclusions": {},
+            "profile_update": None,
             "final_response": None,
         }
 
@@ -605,6 +729,22 @@ async def chat(req: ChatRequest):
         for i in range(0, len(final_response), CHUNK_SIZE):
             chunk = final_response[i:i + CHUNK_SIZE]
             yield f"data: {json.dumps({'choices': [{'delta': {'content': chunk}}]})}\n\n"
+
+        # Send action event if profile update was prepared
+        profile_update = final_state.get("profile_update")
+        if profile_update:
+            action_payload = {
+                "type": "action",
+                "action": {
+                    "type": "profile_update",
+                    "field": profile_update["supabase_field"],
+                    "field_label": profile_update["field_label"],
+                    "current": profile_update["current"],
+                    "proposed": profile_update["proposed"],
+                    "summary": profile_update["understood"],
+                }
+            }
+            yield f"data: {json.dumps(action_payload)}\n\n"
 
         yield "data: [DONE]\n\n"
 
@@ -630,11 +770,28 @@ async def chat(req: ChatRequest):
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# ALGOSCOUT — INTERVIEW GRAPH
-# ═══════════════════════════════════════════════════════════════════════════════
+# ── Profile Update Endpoint ───────────────────────────────────────────────────
+class ProfileUpdateRequest(BaseModel):
+    user_id: str
+    field: str
+    value: Any
 
-# ── Interview State ───────────────────────────────────────────────────────────
+@app.post("/profile/update")
+async def update_profile(req: ProfileUpdateRequest):
+    valid_fields = [f["supabase_field"] for f in UPDATABLE_FIELDS.values()]
+    if req.field not in valid_fields:
+        raise HTTPException(status_code=400, detail=f"Field '{req.field}' is not editable via chat")
+    try:
+        supabase.from_("profiles").update(
+            {req.field: req.value}
+        ).eq("user_id", req.user_id).execute()
+        return {"success": True, "field": req.field, "value": req.value}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# INTERVIEW GRAPH
+# ═══════════════════════════════════════════════════════════════════════════════
 class InterviewState(TypedDict):
     user_id: str
     session_id: str
@@ -654,7 +811,6 @@ class InterviewState(TypedDict):
     interview_context: Optional[str]
     final_response: Optional[str]
 
-# ── Interview System Prompt ───────────────────────────────────────────────────
 INTERVIEW_IDENTITY = """You are a senior interviewer at {company}. Your name is ALGO.
 You are conducting a {role} interview with {name}.
 You are warm but professional — like a real human interviewer who actually enjoys their job.
@@ -744,8 +900,7 @@ def interview_router(state: InterviewState) -> str:
     duration = state.get("duration_minutes", 15)
     max_questions = {5: 4, 10: 7, 15: 10, 20: 14, 30: 20}.get(duration, 10)
     if state["question_count"] >= max_questions: return "end"
-    score = state.get("running_score", 5.0)
-    if score < 4.0: return "probe"
+    if state.get("running_score", 5.0) < 4.0: return "probe"
     return "next"
 
 async def build_interview_context(state: InterviewState) -> InterviewState:
@@ -757,9 +912,7 @@ async def build_interview_context(state: InterviewState) -> InterviewState:
     route = interview_router(state)
     resume_json = resume.get("tailored_json", {}) if resume else {}
     skills = ", ".join(profile.get("skills", []) or resume_json.get("skills", []))
-    gap_instruction = ""
-    if skills_gap:
-        gap_instruction = f"\nPRIORITY TOPICS (gaps): {', '.join(skills_gap[:5])}\nProbe these areas."
+    gap_instruction = f"\nPRIORITY TOPICS (gaps): {', '.join(skills_gap[:5])}\nProbe these areas." if skills_gap else ""
     route_instruction = {
         "probe": "Their last answer was weak. Probe deeper on same topic.",
         "next": f"Move to next topic. Difficulty: {difficulty}. Ask something requiring depth.",
@@ -827,9 +980,8 @@ async def interview_responder(state: InterviewState) -> InterviewState:
             lc_messages.append(AIMessage(content=m["content"]))
     full_response = ""
     async for chunk in llm.astream(lc_messages):
-        token = chunk.content
-        if token:
-            full_response += token
+        if chunk.content:
+            full_response += chunk.content
     state["final_response"] = full_response
     return state
 
@@ -871,6 +1023,7 @@ async def interview(req: InterviewRequest):
     )
     if not last_user_msg:
         raise HTTPException(status_code=400, detail="No user message found")
+
     async def stream_response():
         state: InterviewState = {
             "user_id": req.user_id, "session_id": req.session_id,
@@ -889,6 +1042,7 @@ async def interview(req: InterviewRequest):
             chunk = final_response[i:i + CHUNK_SIZE]
             yield f"data: {json.dumps({'choices': [{'delta': {'content': chunk}}]})}\n\n"
         yield "data: [DONE]\n\n"
+
     return StreamingResponse(stream_response(), media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
@@ -937,9 +1091,10 @@ Return ONLY valid JSON:
         raw = response.content.strip().replace("```json", "").replace("```", "").strip()
         feedback = json.loads(raw)
         try:
+            import datetime
             supabase.from_("interview_sessions").update({
                 "feedback": feedback,
-                "completed_at": __import__("datetime").datetime.utcnow().isoformat(),
+                "completed_at": datetime.datetime.utcnow().isoformat(),
                 "messages": req.messages,
             }).eq("id", req.session_id).execute()
         except Exception as e:
