@@ -24,6 +24,7 @@ supabase: Client = create_client(
     os.getenv("SUPABASE_SERVICE_ROLE_KEY"),
 )
 
+# ── LLM instances — 70b for quality, 8b for cheap classification ──────────────
 llm = ChatGroq(
     api_key=os.getenv("GROQ_API_KEY"),
     model="llama-3.3-70b-versatile",
@@ -31,6 +32,14 @@ llm = ChatGroq(
     streaming=True,
     frequency_penalty=0.8,
     presence_penalty=0.6,
+)
+
+# 8b: classifier + answer evaluator only — ~10x cheaper per token
+llm_fast = ChatGroq(
+    api_key=os.getenv("GROQ_API_KEY"),
+    model="llama-3.1-8b-instant",
+    temperature=0.0,
+    streaming=False,
 )
 
 app = FastAPI(title="AlgoScout LangGraph Backend")
@@ -224,7 +233,7 @@ async def analyze_history(state: AgentState) -> AgentState:
     return state
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# NODE 3 — Smart Classifier (LLM-based routing)
+# NODE 3 — Smart Classifier (llm_fast — 8b model, cheap)
 # ═══════════════════════════════════════════════════════════════════════════════
 async def smart_classifier(state: AgentState) -> AgentState:
     msg = state["user_message"]
@@ -242,7 +251,8 @@ Message: "{msg}"
 Reply with ONLY one word: greeting, emotional, off_topic, profile_update, or career"""
 
     try:
-        result = await llm.ainvoke([
+        # ── USE llm_fast (8b) — classifier doesn't need 70b ──
+        result = await llm_fast.ainvoke([
             SystemMessage(content="You are a message classifier. Reply with only one word."),
             HumanMessage(content=classify_prompt)
         ])
@@ -349,7 +359,6 @@ Return ONLY the JSON. No explanation."""
         current = profile.get(field)
         proposed = parsed.get("proposed")
 
-        # Handle array merge/remove
         if field_meta["type"] == "array":
             current_list = list(current or [])
             if parsed.get("action_type") == "add":
@@ -369,7 +378,6 @@ Return ONLY the JSON. No explanation."""
         }
         print(f"[node:profile_update_detector] field={field} proposed={proposed}")
     except Exception as e:
-        await log_event("error", f"Chat save failed: {str(e)}", "chat_endpoint")
         print(f"[node:profile_update_detector] error: {e}")
         state["profile_update"] = None
 
@@ -407,7 +415,7 @@ Max 2 sentences. Sound like a real person."""
     return state
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# NODE 8 — Career Reasoning (seniority + intent)
+# NODE 8 — Career Reasoning (seniority + intent, no LLM)
 # ═══════════════════════════════════════════════════════════════════════════════
 async def career_reasoning(state: AgentState) -> AgentState:
     profile = state["profile"]
@@ -470,7 +478,7 @@ Experience:
     return state
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# NODE 10 — Apply Tooling (build career context)
+# NODE 10 — Apply Tooling
 # ═══════════════════════════════════════════════════════════════════════════════
 async def apply_tooling(state: AgentState) -> AgentState:
     profile = state["profile"]
@@ -572,7 +580,7 @@ async def consistency_checker(state: AgentState) -> AgentState:
     return state
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# NODE 12 — Responder (career path LLM call)
+# NODE 12 — Responder (70b — quality matters here)
 # ═══════════════════════════════════════════════════════════════════════════════
 async def responder(state: AgentState) -> AgentState:
     system = IDENTITY_PROMPT.format(app_navigation=APP_NAVIGATION)
@@ -679,13 +687,8 @@ def build_graph():
 algo_graph = build_graph()
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# API — Chat
+# Logging
 # ═══════════════════════════════════════════════════════════════════════════════
-@app.get("/")
-async def root():
-    return {"status": "AlgoScout LangGraph backend running — 14 nodes"}
-
-
 async def log_event(type: str, message: str, source: str, metadata: dict = {}):
     try:
         supabase.from_("monitor_logs").insert({
@@ -696,26 +699,66 @@ async def log_event(type: str, message: str, source: str, metadata: dict = {}):
         }).execute()
     except Exception as e:
         print(f"[monitor] failed to log: {e}")
-        await log_event("error", f"Chat save failed: {str(e)}", "chat_endpoint")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# API Routes
+# ═══════════════════════════════════════════════════════════════════════════════
+@app.get("/")
+async def root():
+    return {"status": "AlgoScout LangGraph backend running — 14 nodes"}
+
 
 @app.get("/health")
 async def health():
     groq_ok = True
+    groq_status = "ok"
     supabase_ok = True
+
+    # Real Supabase check
     try:
         supabase.from_("profiles").select("id").limit(1).execute()
     except:
         supabase_ok = False
         await log_event("error", "Supabase unreachable", "health_endpoint")
 
+    # Real Groq check — tiny prompt, catches 429s
+    try:
+        import httpx
+        resp = httpx.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {os.getenv('GROQ_API_KEY')}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "llama-3.1-8b-instant",
+                "max_tokens": 1,
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+            timeout=8.0,
+        )
+        if resp.status_code == 429:
+            groq_ok = False
+            groq_status = "rate_limited"
+            await log_event("warning", "Groq rate limit hit", "health_endpoint")
+        elif resp.status_code != 200:
+            groq_ok = False
+            groq_status = f"error_{resp.status_code}"
+            await log_event("error", f"Groq returned {resp.status_code}", "health_endpoint")
+    except Exception as e:
+        groq_ok = False
+        groq_status = "unreachable"
+        await log_event("error", f"Groq unreachable: {str(e)}", "health_endpoint")
+
     status = "ok" if groq_ok and supabase_ok else "degraded"
     return {
         "status": status,
         "groq": groq_ok,
+        "groq_status": groq_status,
         "supabase": supabase_ok,
         "timestamp": datetime.datetime.utcnow().isoformat(),
     }
-   
+
 
 @app.post("/chat")
 async def chat(req: ChatRequest):
@@ -760,7 +803,6 @@ async def chat(req: ChatRequest):
             chunk = final_response[i:i + CHUNK_SIZE]
             yield f"data: {json.dumps({'choices': [{'delta': {'content': chunk}}]})}\n\n"
 
-        # Send action event if profile update was prepared
         profile_update = final_state.get("profile_update")
         if profile_update:
             action_payload = {
@@ -818,7 +860,7 @@ async def update_profile(req: ProfileUpdateRequest):
         ).eq("user_id", req.user_id).execute()
         return {"success": True, "field": req.field, "value": req.value}
     except Exception as e:
-        await log_event("error", f"Chat save failed: {str(e)}", "chat_endpoint")
+        await log_event("error", f"Profile update failed: {str(e)}", "profile_endpoint")
         raise HTTPException(status_code=500, detail=str(e))
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -912,11 +954,12 @@ async def answer_evaluator(state: InterviewState) -> InterviewState:
     job = state["job"] or {}
     eval_prompt = f"""Rate this interview answer for a {job.get('role', 'technical')} role on a scale of 1-10.
 Answer: "{last_answer}"
-Job requires: {job.get('raw_text', '')[:500]}
+Job requires: {job.get('raw_text', '')[:300]}
 Respond with ONLY a number between 1 and 10. Nothing else."""
     try:
-        eval_res = await llm.ainvoke([
-            SystemMessage(content="You are an interview evaluator. Respond with only a number."),
+        # ── USE llm_fast (8b) — just outputs a number ──
+        eval_res = await llm_fast.ainvoke([
+            SystemMessage(content="You are an interview evaluator. Respond with only a number 1-10."),
             HumanMessage(content=eval_prompt)
         ])
         score = float(eval_res.content.strip().split()[0])
@@ -1115,8 +1158,12 @@ Return ONLY valid JSON:
   "hire_likelihood": "<Strong Yes | Yes | Maybe | No>",
   "coach_note": "<motivational note>"
 }}"""
-        feedback_llm = ChatGroq(api_key=os.getenv("GROQ_API_KEY"),
-            model="llama-3.3-70b-versatile", temperature=0.3, streaming=False)
+        feedback_llm = ChatGroq(
+            api_key=os.getenv("GROQ_API_KEY"),
+            model="llama-3.3-70b-versatile",
+            temperature=0.3,
+            streaming=False,
+        )
         response = await feedback_llm.ainvoke([
             SystemMessage(content="You are an interview evaluator. Return only valid JSON."),
             HumanMessage(content=feedback_prompt),
@@ -1124,7 +1171,6 @@ Return ONLY valid JSON:
         raw = response.content.strip().replace("```json", "").replace("```", "").strip()
         feedback = json.loads(raw)
         try:
-            import datetime
             supabase.from_("interview_sessions").update({
                 "feedback": feedback,
                 "completed_at": datetime.datetime.utcnow().isoformat(),
@@ -1132,7 +1178,7 @@ Return ONLY valid JSON:
             }).eq("id", req.session_id).execute()
         except Exception as e:
             print(f"[feedback] save error: {e}")
-            await log_event("error", f"Chat save failed: {str(e)}", "chat_endpoint")
+            await log_event("error", f"Feedback save failed: {str(e)}", "feedback_endpoint")
         return {"success": True, "feedback": feedback}
     except Exception as e:
         print(f"[feedback] error: {e}")
