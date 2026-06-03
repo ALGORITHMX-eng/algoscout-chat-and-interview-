@@ -24,9 +24,12 @@ supabase: Client = create_client(
     os.getenv("SUPABASE_SERVICE_ROLE_KEY"),
 )
 
-# ── LLM instances — 70b for quality, 8b for cheap classification ──────────────
-llm = ChatGroq(
-    api_key=os.getenv("GROQ_API_KEY"),
+# ── LLM instances ─────────────────────────────────────────────────────────────
+# FIX 1: 3 separate Groq accounts — chat, interview, fast classifier
+# Each account has its own 1,000 req/day — no more competing limits
+
+llm_chat = ChatGroq(
+    api_key=os.getenv("GROQ_API_KEY"),               # Account 1 — chat only
     model="llama-3.3-70b-versatile",
     temperature=0.2,
     streaming=True,
@@ -34,9 +37,17 @@ llm = ChatGroq(
     presence_penalty=0.6,
 )
 
-# 8b: classifier + answer evaluator only — ~10x cheaper per token
+llm_interview = ChatGroq(
+    api_key=os.getenv("GROQ_API_KEY_INTERVIEW"),      # Account 2 — interview only
+    model="llama-3.3-70b-versatile",
+    temperature=0.2,
+    streaming=True,
+    frequency_penalty=0.8,
+    presence_penalty=0.6,
+)
+
 llm_fast = ChatGroq(
-    api_key=os.getenv("GROQ_API_KEY"),
+    api_key=os.getenv("GROQ_API_KEY"),                # Account 1 — cheap classifier
     model="llama-3.1-8b-instant",
     temperature=0.0,
     streaming=False,
@@ -142,11 +153,40 @@ UPDATABLE_FIELDS = {
     "portfolio":          {"label": "Portfolio URL",       "supabase_field": "portfolio",           "type": "string"},
 }
 
+# ── Usage Logger ──────────────────────────────────────────────────────────────
+# FIX 5: Log every Groq call to Supabase for monitor dashboard tracking
+async def log_api_usage(feature: str, model: str, input_tokens: int, output_tokens: int, user_id: str = "system"):
+    try:
+        await asyncio.to_thread(
+            lambda: supabase.from_("api_usage").insert({
+                "feature": feature,
+                "model": model,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "total_tokens": input_tokens + output_tokens,
+                "user_id": user_id,
+                "created_at": datetime.datetime.utcnow().isoformat(),
+            }).execute()
+        )
+    except Exception as e:
+        print(f"[usage_logger] failed: {e}")
+
 # ═══════════════════════════════════════════════════════════════════════════════
-# NODE 1 — Retrieve Profile + Resume (parallelized)
+# NODE 1 — Retrieve Profile + Resume
+# FIX 4: Skip DB fetch entirely for greetings/emotional/off_topic
 # ═══════════════════════════════════════════════════════════════════════════════
 async def retrieve_profile(state: AgentState) -> AgentState:
     user_id = state["user_id"]
+    msg = state["user_message"].lower().strip()
+
+    # FIX 4: greetings don't need profile data — skip all DB calls
+    greeting_words = ["hi", "hey", "hello", "what's up", "whats up", "morning", "afternoon", "evening", "yo", "sup"]
+    is_greeting = any(msg == w or msg.startswith(w + " ") or msg.startswith(w + "!") for w in greeting_words)
+    if is_greeting:
+        state["profile"] = {}
+        state["resume"] = None
+        print(f"[node:retrieve_profile] greeting detected — skipped DB fetch")
+        return state
 
     def fetch_profile():
         try:
@@ -172,17 +212,31 @@ async def retrieve_profile(state: AgentState) -> AgentState:
     return state
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# NODE 2 — Analyze History (parallelized)
+# NODE 2 — Analyze History
+# FIX 4: Skip DB fetch for greetings/emotional/off_topic
+# FIX 2: Remove session_history fetch — frontend messages already has history
 # ═══════════════════════════════════════════════════════════════════════════════
 async def analyze_history(state: AgentState) -> AgentState:
     user_id = state["user_id"]
-    session_id = state["session_id"]
+
+    # FIX 4: no need for job data on simple messages
+    profile = state.get("profile") or {}
+    if not profile and not state.get("user_message", ""):
+        state["applied_jobs"] = []
+        state["pending_jobs"] = []
+        state["session_history"] = []
+        state["skills_gap"] = []
+        state["previous_conclusions"] = {}
+        state["rejected_jobs"] = []
+        state["recent_interviews"] = []
+        state["profile_update"] = None
+        return state
 
     def fetch_applied():
         try:
             return supabase.from_("jobs").select("company, role, score, score_reason, score_breakdown") \
                 .eq("user_id", user_id).eq("status", "approved") \
-                .order("found_at", desc=True).limit(10).execute()
+                .order("found_at", desc=True).limit(5).execute()   # FIX: reduced from 10 to 5
         except: return None
 
     def fetch_pending():
@@ -192,29 +246,23 @@ async def analyze_history(state: AgentState) -> AgentState:
                 .order("score", desc=True).limit(5).execute()
         except: return None
 
-    def fetch_history():
-        try:
-            return supabase.from_("coach_conversations").select("role, content") \
-                .eq("user_id", user_id).eq("session_id", session_id) \
-                .order("created_at", desc=True).limit(20).execute()
-        except: return None
-
+    # FIX 2: Removed fetch_history — frontend already sends conversation history
+    # This was causing the same messages to be sent TWICE to the 70b model
     def fetch_conclusions():
         try:
             return supabase.from_("session_conclusions").select("conclusions") \
-                .eq("user_id", user_id).eq("session_id", session_id).single().execute()
+                .eq("user_id", user_id).eq("session_id", state["session_id"]).single().execute()
         except: return None
 
-    applied_res, pending_res, history_res, conclusions_res = await asyncio.gather(
+    applied_res, pending_res, conclusions_res = await asyncio.gather(
         asyncio.to_thread(fetch_applied),
         asyncio.to_thread(fetch_pending),
-        asyncio.to_thread(fetch_history),
         asyncio.to_thread(fetch_conclusions),
     )
 
     state["applied_jobs"] = (applied_res.data if applied_res else None) or []
     state["pending_jobs"] = (pending_res.data if pending_res else None) or []
-    state["session_history"] = list(reversed((history_res.data if history_res else None) or []))
+    state["session_history"] = []   # FIX 2: no longer fetching from DB — using frontend messages
     state["previous_conclusions"] = (conclusions_res.data.get("conclusions", {}) if conclusions_res and conclusions_res.data else {})
     state["rejected_jobs"] = []
     state["recent_interviews"] = []
@@ -229,11 +277,11 @@ async def analyze_history(state: AgentState) -> AgentState:
             except: pass
     state["skills_gap"] = [s for s, _ in Counter(all_missing).most_common(10)]
 
-    print(f"[node:analyze_history] applied={len(state['applied_jobs'])} history={len(state['session_history'])}")
+    print(f"[node:analyze_history] applied={len(state['applied_jobs'])}")
     return state
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# NODE 3 — Smart Classifier (llm_fast — 8b model, cheap)
+# NODE 3 — Smart Classifier (8b model — cheap)
 # ═══════════════════════════════════════════════════════════════════════════════
 async def smart_classifier(state: AgentState) -> AgentState:
     msg = state["user_message"]
@@ -251,7 +299,6 @@ Message: "{msg}"
 Reply with ONLY one word: greeting, emotional, off_topic, profile_update, or career"""
 
     try:
-        # ── USE llm_fast (8b) — classifier doesn't need 70b ──
         result = await llm_fast.ainvoke([
             SystemMessage(content="You are a message classifier. Reply with only one word."),
             HumanMessage(content=classify_prompt)
@@ -273,6 +320,7 @@ def router(state: AgentState) -> str:
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # NODE 4 — Greeting Responder
+# FIX 3: Moved from 70b to 8b — simple greeting doesn't need heavy model
 # ═══════════════════════════════════════════════════════════════════════════════
 async def greeting_responder(state: AgentState) -> AgentState:
     profile = state["profile"] or {}
@@ -289,11 +337,14 @@ RULES:
 - Max 2 sentences. Sound like a real person."""
 
     full_response = ""
-    async for chunk in llm.astream([SystemMessage(content=prompt), HumanMessage(content=state["user_message"])]):
+    # FIX 3: Use llm_fast (8b) for greetings — saves 70b tokens
+    async for chunk in llm_fast.astream([SystemMessage(content=prompt), HumanMessage(content=state["user_message"])]):
         if chunk.content:
             full_response += chunk.content
 
     state["final_response"] = full_response
+    # Log usage (greeting = very few tokens, no need to count exactly)
+    asyncio.create_task(log_api_usage("chat_greeting", "llama-3.1-8b-instant", 200, len(full_response) // 4, state["user_id"]))
     return state
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -308,6 +359,7 @@ async def off_topic_rejector(state: AgentState) -> AgentState:
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # NODE 6 — Profile Update Detector
+# FIX 3: Moved from 70b to 8b — JSON extraction doesn't need heavy model
 # ═══════════════════════════════════════════════════════════════════════════════
 async def profile_update_detector(state: AgentState) -> AgentState:
     profile = state["profile"] or {}
@@ -343,7 +395,8 @@ For "replace": use new value directly.
 Return ONLY the JSON. No explanation."""
 
     try:
-        result = await llm.ainvoke([
+        # FIX 3: Use llm_fast (8b) — just JSON extraction, no need for 70b
+        result = await llm_fast.ainvoke([
             SystemMessage(content="You extract profile update intentions. Return only valid JSON."),
             HumanMessage(content=extract_prompt)
         ])
@@ -385,6 +438,7 @@ Return ONLY the JSON. No explanation."""
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # NODE 7 — Profile Update Responder
+# FIX 3: Moved from 70b to 8b
 # ═══════════════════════════════════════════════════════════════════════════════
 async def profile_update_responder(state: AgentState) -> AgentState:
     update = state.get("profile_update")
@@ -404,7 +458,8 @@ Field: {update['field_label']}
 Max 2 sentences. Sound like a real person."""
 
     try:
-        result = await llm.ainvoke([
+        # FIX 3: Use llm_fast (8b) — simple confirmation message
+        result = await llm_fast.ainvoke([
             SystemMessage(content="You confirm profile update intentions briefly."),
             HumanMessage(content=prompt)
         ])
@@ -415,7 +470,7 @@ Max 2 sentences. Sound like a real person."""
     return state
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# NODE 8 — Career Reasoning (seniority + intent, no LLM)
+# NODE 8 — Career Reasoning (no LLM)
 # ═══════════════════════════════════════════════════════════════════════════════
 async def career_reasoning(state: AgentState) -> AgentState:
     profile = state["profile"]
@@ -581,34 +636,39 @@ async def consistency_checker(state: AgentState) -> AgentState:
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # NODE 12 — Responder (70b — quality matters here)
+# FIX 2: Removed session_history loop — was sending same messages twice!
+# Now only uses frontend messages (last 10 for good context window)
 # ═══════════════════════════════════════════════════════════════════════════════
 async def responder(state: AgentState) -> AgentState:
     system = IDENTITY_PROMPT.format(app_navigation=APP_NAVIGATION)
     lc_messages = [SystemMessage(content=f"{system}\n\n{state['career_context']}")]
 
-    for h in (state["session_history"] or []):
-        if h["role"] == "user":
-            lc_messages.append(HumanMessage(content=h["content"]))
-        else:
-            lc_messages.append(AIMessage(content=h["content"]))
-
-    for m in state["messages"][-6:]:
+    # FIX 2: Only use frontend messages — removed the DB session_history loop
+    # Frontend already sends full conversation history, no need to double-send
+    for m in state["messages"][-10:]:
         if m["role"] == "user":
             lc_messages.append(HumanMessage(content=m["content"]))
         elif m["role"] == "assistant":
             lc_messages.append(AIMessage(content=m["content"]))
 
     full_response = ""
-    async for chunk in llm.astream(lc_messages):
+    async for chunk in llm_chat.astream(lc_messages):
         if chunk.content:
             full_response += chunk.content
 
     state["final_response"] = full_response
+
+    # FIX 5: Log usage to Supabase for monitor dashboard
+    input_estimate = sum(len(m.content) for m in lc_messages) // 4
+    output_estimate = len(full_response) // 4
+    asyncio.create_task(log_api_usage("chat", "llama-3.3-70b-versatile", input_estimate, output_estimate, state["user_id"]))
+
     print(f"[node:responder] len={len(full_response)}")
     return state
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # NODE 13 — Emotional Responder
+# FIX 3: Moved from 70b to 8b
 # ═══════════════════════════════════════════════════════════════════════════════
 async def emotional_responder(state: AgentState) -> AgentState:
     profile = state["profile"] or {}
@@ -624,7 +684,8 @@ RULES:
 - Max 3 sentences total."""
 
     full_response = ""
-    async for chunk in llm.astream([SystemMessage(content=prompt), HumanMessage(content=state["user_message"])]):
+    # FIX 3: Use llm_fast (8b) — empathy doesn't need 70b
+    async for chunk in llm_fast.astream([SystemMessage(content=prompt), HumanMessage(content=state["user_message"])]):
         if chunk.content:
             full_response += chunk.content
 
@@ -714,14 +775,12 @@ async def health():
     groq_status = "ok"
     supabase_ok = True
 
-    # Real Supabase check
     try:
         supabase.from_("profiles").select("id").limit(1).execute()
     except:
         supabase_ok = False
         await log_event("error", "Supabase unreachable", "health_endpoint")
 
-    # Real Groq check — tiny prompt, catches 429s
     try:
         import httpx
         resp = httpx.post(
@@ -820,6 +879,7 @@ async def chat(req: ChatRequest):
 
         yield "data: [DONE]\n\n"
 
+        # Save conversation to DB after streaming
         try:
             supabase.from_("coach_conversations").insert({
                 "user_id": req.user_id,
@@ -843,6 +903,7 @@ async def chat(req: ChatRequest):
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
+
 # ── Profile Update Endpoint ───────────────────────────────────────────────────
 class ProfileUpdateRequest(BaseModel):
     user_id: str
@@ -862,6 +923,7 @@ async def update_profile(req: ProfileUpdateRequest):
     except Exception as e:
         await log_event("error", f"Profile update failed: {str(e)}", "profile_endpoint")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # INTERVIEW GRAPH
@@ -957,7 +1019,6 @@ Answer: "{last_answer}"
 Job requires: {job.get('raw_text', '')[:300]}
 Respond with ONLY a number between 1 and 10. Nothing else."""
     try:
-        # ── USE llm_fast (8b) — just outputs a number ──
         eval_res = await llm_fast.ainvoke([
             SystemMessage(content="You are an interview evaluator. Respond with only a number 1-10."),
             HumanMessage(content=eval_prompt)
@@ -1054,11 +1115,20 @@ async def interview_responder(state: InterviewState) -> InterviewState:
             lc_messages.append(HumanMessage(content=content))
         elif m["role"] == "assistant":
             lc_messages.append(AIMessage(content=m["content"]))
+
     full_response = ""
-    async for chunk in llm.astream(lc_messages):
+    # FIX 1: Use llm_interview (Account 2) — dedicated interview account
+    async for chunk in llm_interview.astream(lc_messages):
         if chunk.content:
             full_response += chunk.content
+
     state["final_response"] = full_response
+
+    # FIX 5: Log interview usage
+    input_estimate = sum(len(m.content) for m in lc_messages) // 4
+    output_estimate = len(full_response) // 4
+    asyncio.create_task(log_api_usage("interview", "llama-3.3-70b-versatile", input_estimate, output_estimate, state["user_id"]))
+
     return state
 
 def build_interview_graph():
@@ -1122,6 +1192,7 @@ async def interview(req: InterviewRequest):
     return StreamingResponse(stream_response(), media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
+
 class FeedbackRequest(BaseModel):
     user_id: str
     job_id: str
@@ -1158,8 +1229,10 @@ Return ONLY valid JSON:
   "hire_likelihood": "<Strong Yes | Yes | Maybe | No>",
   "coach_note": "<motivational note>"
 }}"""
+
+        # FIX 1: Use llm_interview account for feedback too
         feedback_llm = ChatGroq(
-            api_key=os.getenv("GROQ_API_KEY"),
+            api_key=os.getenv("GROQ_API_KEY_INTERVIEW"),
             model="llama-3.3-70b-versatile",
             temperature=0.3,
             streaming=False,
@@ -1170,6 +1243,10 @@ Return ONLY valid JSON:
         ])
         raw = response.content.strip().replace("```json", "").replace("```", "").strip()
         feedback = json.loads(raw)
+
+        # FIX 5: Log feedback usage
+        asyncio.create_task(log_api_usage("interview_feedback", "llama-3.3-70b-versatile", len(feedback_prompt) // 4, len(raw) // 4, req.user_id))
+
         try:
             supabase.from_("interview_sessions").update({
                 "feedback": feedback,
@@ -1184,6 +1261,34 @@ Return ONLY valid JSON:
         print(f"[feedback] error: {e}")
         await log_event("error", f"Feedback generation failed: {str(e)}", "feedback_endpoint")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Usage Stats Endpoint — for monitor dashboard
+# ═══════════════════════════════════════════════════════════════════════════════
+@app.get("/usage/today")
+async def usage_today():
+    """Returns today's API usage stats for the monitor dashboard"""
+    try:
+        today = datetime.datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        res = supabase.from_("api_usage").select("feature, model, input_tokens, output_tokens, total_tokens") \
+            .gte("created_at", today).execute()
+
+        rows = res.data or []
+        stats = {}
+        for row in rows:
+            feature = row["feature"]
+            if feature not in stats:
+                stats[feature] = {"calls": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+            stats[feature]["calls"] += 1
+            stats[feature]["input_tokens"] += row.get("input_tokens", 0)
+            stats[feature]["output_tokens"] += row.get("output_tokens", 0)
+            stats[feature]["total_tokens"] += row.get("total_tokens", 0)
+
+        return {"success": True, "date": today, "stats": stats}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 if __name__ == "__main__":
     import uvicorn
