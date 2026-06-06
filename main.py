@@ -25,11 +25,8 @@ supabase: Client = create_client(
 )
 
 # ── LLM instances ─────────────────────────────────────────────────────────────
-# FIX 1: 3 separate Groq accounts — chat, interview, fast classifier
-# Each account has its own 1,000 req/day — no more competing limits
-
 llm_chat = ChatGroq(
-    api_key=os.getenv("GROQ_API_KEY"),               # Account 1 — chat only
+    api_key=os.getenv("GROQ_API_KEY"),
     model="llama-3.3-70b-versatile",
     temperature=0.2,
     streaming=True,
@@ -38,7 +35,7 @@ llm_chat = ChatGroq(
 )
 
 llm_interview = ChatGroq(
-    api_key=os.getenv("GROQ_API_KEY_INTERVIEW"),      # Account 2 — interview only
+    api_key=os.getenv("GROQ_API_KEY_INTERVIEW"),
     model="llama-3.3-70b-versatile",
     temperature=0.2,
     streaming=True,
@@ -47,7 +44,7 @@ llm_interview = ChatGroq(
 )
 
 llm_fast = ChatGroq(
-    api_key=os.getenv("GROQ_API_KEY"),                # Account 1 — cheap classifier
+    api_key=os.getenv("GROQ_API_KEY"),
     model="llama-3.1-8b-instant",
     temperature=0.0,
     streaming=False,
@@ -113,6 +110,11 @@ PERSONALITY:
 - When someone asks where to do something in the app, tell them exactly where to go.
 - When someone is venting or frustrated, acknowledge it first before strategy.
 
+NIGERIAN PIDGIN / INFORMAL ENGLISH AWARENESS:
+- This user may write in Nigerian Pidgin or Yoruba-inflected English.
+- Words like "jharre", "nah", "oya", "sha", "abeg", "wetin" are emotional fillers or emphasis — NEVER treat them as names or commands.
+- Read emotional tone from context, not literal word parsing.
+
 CONTACT / SUPPORT:
 Your support email is: algorithmengineer4@gmail.com
 Share it ONLY in these 3 situations:
@@ -154,7 +156,6 @@ UPDATABLE_FIELDS = {
 }
 
 # ── Usage Logger ──────────────────────────────────────────────────────────────
-# FIX 5: Log every Groq call to Supabase for monitor dashboard tracking
 async def log_api_usage(feature: str, model: str, input_tokens: int, output_tokens: int, user_id: str = "system"):
     try:
         await asyncio.to_thread(
@@ -173,13 +174,11 @@ async def log_api_usage(feature: str, model: str, input_tokens: int, output_toke
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # NODE 1 — Retrieve Profile + Resume
-# FIX 4: Skip DB fetch entirely for greetings/emotional/off_topic
 # ═══════════════════════════════════════════════════════════════════════════════
 async def retrieve_profile(state: AgentState) -> AgentState:
     user_id = state["user_id"]
     msg = state["user_message"].lower().strip()
 
-    # FIX 4: greetings don't need profile data — skip all DB calls
     greeting_words = ["hi", "hey", "hello", "what's up", "whats up", "morning", "afternoon", "evening", "yo", "sup"]
     is_greeting = any(msg == w or msg.startswith(w + " ") or msg.startswith(w + "!") for w in greeting_words)
     if is_greeting:
@@ -213,13 +212,11 @@ async def retrieve_profile(state: AgentState) -> AgentState:
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # NODE 2 — Analyze History
-# FIX 4: Skip DB fetch for greetings/emotional/off_topic
-# FIX 2: Remove session_history fetch — frontend messages already has history
+# FIX: Now fetches interview summaries (not full transcripts) from Supabase
 # ═══════════════════════════════════════════════════════════════════════════════
 async def analyze_history(state: AgentState) -> AgentState:
     user_id = state["user_id"]
 
-    # FIX 4: no need for job data on simple messages
     profile = state.get("profile") or {}
     if not profile and not state.get("user_message", ""):
         state["applied_jobs"] = []
@@ -236,7 +233,7 @@ async def analyze_history(state: AgentState) -> AgentState:
         try:
             return supabase.from_("jobs").select("company, role, score, score_reason, score_breakdown") \
                 .eq("user_id", user_id).eq("status", "approved") \
-                .order("found_at", desc=True).limit(5).execute()   # FIX: reduced from 10 to 5
+                .order("found_at", desc=True).limit(5).execute()
         except: return None
 
     def fetch_pending():
@@ -246,27 +243,48 @@ async def analyze_history(state: AgentState) -> AgentState:
                 .order("score", desc=True).limit(5).execute()
         except: return None
 
-    # FIX 2: Removed fetch_history — frontend already sends conversation history
-    # This was causing the same messages to be sent TWICE to the 70b model
     def fetch_conclusions():
         try:
             return supabase.from_("session_conclusions").select("conclusions") \
                 .eq("user_id", user_id).eq("session_id", state["session_id"]).single().execute()
         except: return None
 
-    applied_res, pending_res, conclusions_res = await asyncio.gather(
+    # FIX: Fetch interview summaries — only score + feedback fields, not full messages
+    def fetch_interviews():
+        try:
+            return supabase.from_("interview_sessions").select(
+                "id, created_at, score, feedback"
+            ).eq("user_id", user_id).order("created_at", desc=True).limit(3).execute()
+        except: return None
+
+    applied_res, pending_res, conclusions_res, interviews_res = await asyncio.gather(
         asyncio.to_thread(fetch_applied),
         asyncio.to_thread(fetch_pending),
         asyncio.to_thread(fetch_conclusions),
+        asyncio.to_thread(fetch_interviews),
     )
 
     state["applied_jobs"] = (applied_res.data if applied_res else None) or []
     state["pending_jobs"] = (pending_res.data if pending_res else None) or []
-    state["session_history"] = []   # FIX 2: no longer fetching from DB — using frontend messages
+    state["session_history"] = []
     state["previous_conclusions"] = (conclusions_res.data.get("conclusions", {}) if conclusions_res and conclusions_res.data else {})
     state["rejected_jobs"] = []
-    state["recent_interviews"] = []
     state["profile_update"] = None
+
+    # FIX: Store only compact interview summary — never raw transcript
+    raw_interviews = (interviews_res.data if interviews_res else []) or []
+    state["recent_interviews"] = [
+        {
+            "date": s.get("created_at", "")[:10],
+            "score": s.get("score"),
+            "overall_score": (s.get("feedback") or {}).get("overall_score"),
+            "top_strengths": (s.get("feedback") or {}).get("top_strengths", []),
+            "critical_gaps": (s.get("feedback") or {}).get("critical_gaps", []),
+            "hire_likelihood": (s.get("feedback") or {}).get("hire_likelihood"),
+            "overall_verdict": (s.get("feedback") or {}).get("overall_verdict", ""),
+        }
+        for s in raw_interviews
+    ]
 
     all_missing = []
     for job in state["applied_jobs"]:
@@ -277,22 +295,36 @@ async def analyze_history(state: AgentState) -> AgentState:
             except: pass
     state["skills_gap"] = [s for s, _ in Counter(all_missing).most_common(10)]
 
-    print(f"[node:analyze_history] applied={len(state['applied_jobs'])}")
+    print(f"[node:analyze_history] applied={len(state['applied_jobs'])} interviews={len(state['recent_interviews'])}")
     return state
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# NODE 3 — Smart Classifier (8b model — cheap)
+# NODE 3 — Smart Classifier
+# FIX: Better Nigerian Pidgin awareness + emotional detection
+#      "greeting" only fires on the very first message — not mid-conversation
 # ═══════════════════════════════════════════════════════════════════════════════
 async def smart_classifier(state: AgentState) -> AgentState:
     msg = state["user_message"]
 
-    classify_prompt = f"""Classify this message into exactly one category:
+    # Check if this is truly a first message (no prior assistant turns)
+    prior_assistant_msgs = [m for m in state["messages"] if m["role"] == "assistant"]
+    is_first_message = len(prior_assistant_msgs) == 0
 
-- "greeting" → casual hello, hi, hey, what's up, how are you, good morning — small talk with no specific request
-- "emotional" → user is frustrated, sad, giving up, venting about job search, feeling hopeless
-- "off_topic" → requests for coding help (write code, debug, script), recipes, weather, news, sports scores, creative writing unrelated to career
-- "profile_update" → user wants to add, update, change, or remove something from their profile: skills, target roles, years of experience, work preference, location, bio/summary, LinkedIn, GitHub, portfolio
-- "career" → everything else: job questions, resume help, interview prep, salary, skills, app navigation, AlgoScout features, career strategy
+    classify_prompt = f"""Classify this message into exactly one category.
+
+CRITICAL CONTEXT RULES:
+- The user may write in Nigerian Pidgin or informal English
+- Words like "jharre", "nah", "oya", "sha", "abeg", "wetin", "e don do" are emotional fillers or emphasis — NEVER names or commands
+- Swearing + job/rejection context = "emotional", not "greeting"
+- A follow-up message mid-conversation is NEVER "greeting" even if it's short
+- This is message #{len(state['messages'])} in the conversation. First assistant message exists: {not is_first_message}
+
+CATEGORIES:
+- "greeting" → ONLY if this is the very first message AND it is pure casual small talk with zero career intent (hi, hey, hello, what's up). If there has already been conversation, NEVER use this.
+- "emotional" → user is frustrated, venting, swearing, expressing dejection about job search or rejection — includes pidgin expressions like "fuck them jharre", "e don do me like that", "this thing dey pain me"
+- "off_topic" → coding help unrelated to career, recipes, weather, sports scores, news
+- "profile_update" → wants to add, update, change, or remove something from their profile: skills, target roles, years of experience, work preference, location, bio/summary, LinkedIn, GitHub, portfolio
+- "career" → everything else: job questions, resume help, interview prep, salary, skills, app navigation, AlgoScout features, career strategy, rejection analysis
 
 Message: "{msg}"
 
@@ -305,6 +337,9 @@ Reply with ONLY one word: greeting, emotional, off_topic, profile_update, or car
         ])
         category = result.content.strip().lower().split()[0]
         if category in ["greeting", "emotional", "off_topic", "profile_update", "career"]:
+            # Extra guard: if not first message, never classify as greeting
+            if category == "greeting" and not is_first_message:
+                category = "career"
             state["detected_route"] = category
         else:
             state["detected_route"] = "career"
@@ -320,7 +355,6 @@ def router(state: AgentState) -> str:
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # NODE 4 — Greeting Responder
-# FIX 3: Moved from 70b to 8b — simple greeting doesn't need heavy model
 # ═══════════════════════════════════════════════════════════════════════════════
 async def greeting_responder(state: AgentState) -> AgentState:
     profile = state["profile"] or {}
@@ -337,13 +371,11 @@ RULES:
 - Max 2 sentences. Sound like a real person."""
 
     full_response = ""
-    # FIX 3: Use llm_fast (8b) for greetings — saves 70b tokens
     async for chunk in llm_fast.astream([SystemMessage(content=prompt), HumanMessage(content=state["user_message"])]):
         if chunk.content:
             full_response += chunk.content
 
     state["final_response"] = full_response
-    # Log usage (greeting = very few tokens, no need to count exactly)
     asyncio.create_task(log_api_usage("chat_greeting", "llama-3.1-8b-instant", 200, len(full_response) // 4, state["user_id"]))
     return state
 
@@ -359,7 +391,6 @@ async def off_topic_rejector(state: AgentState) -> AgentState:
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # NODE 6 — Profile Update Detector
-# FIX 3: Moved from 70b to 8b — JSON extraction doesn't need heavy model
 # ═══════════════════════════════════════════════════════════════════════════════
 async def profile_update_detector(state: AgentState) -> AgentState:
     profile = state["profile"] or {}
@@ -395,7 +426,6 @@ For "replace": use new value directly.
 Return ONLY the JSON. No explanation."""
 
     try:
-        # FIX 3: Use llm_fast (8b) — just JSON extraction, no need for 70b
         result = await llm_fast.ainvoke([
             SystemMessage(content="You extract profile update intentions. Return only valid JSON."),
             HumanMessage(content=extract_prompt)
@@ -438,7 +468,6 @@ Return ONLY the JSON. No explanation."""
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # NODE 7 — Profile Update Responder
-# FIX 3: Moved from 70b to 8b
 # ═══════════════════════════════════════════════════════════════════════════════
 async def profile_update_responder(state: AgentState) -> AgentState:
     update = state.get("profile_update")
@@ -458,7 +487,6 @@ Field: {update['field_label']}
 Max 2 sentences. Sound like a real person."""
 
     try:
-        # FIX 3: Use llm_fast (8b) — simple confirmation message
         result = await llm_fast.ainvoke([
             SystemMessage(content="You confirm profile update intentions briefly."),
             HumanMessage(content=prompt)
@@ -534,6 +562,7 @@ Experience:
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # NODE 10 — Apply Tooling
+# FIX: Injects interview summary context into career_context
 # ═══════════════════════════════════════════════════════════════════════════════
 async def apply_tooling(state: AgentState) -> AgentState:
     profile = state["profile"]
@@ -600,6 +629,17 @@ INTENT: {intent}
 INSTRUCTION: {intent_instructions}
 """.strip()
 
+    # FIX: Inject interview summary — compact format, no raw transcript
+    if state.get("recent_interviews"):
+        interview_lines = "\n".join([
+            f"• {i['date']} — Score: {i.get('overall_score', 'N/A')}/100 | "
+            f"Gaps: {', '.join((i.get('critical_gaps') or [])[:2])} | "
+            f"Hire likelihood: {i.get('hire_likelihood', 'N/A')} | "
+            f"Verdict: {i.get('overall_verdict', '')}"
+            for i in state["recent_interviews"]
+        ])
+        state["career_context"] += f"\n\nRECENT INTERVIEW PERFORMANCE (summaries only):\n{interview_lines}"
+
     if state.get("resume_context"):
         state["career_context"] += f"\n\n{state['resume_context']}"
 
@@ -635,16 +675,12 @@ async def consistency_checker(state: AgentState) -> AgentState:
     return state
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# NODE 12 — Responder (70b — quality matters here)
-# FIX 2: Removed session_history loop — was sending same messages twice!
-# Now only uses frontend messages (last 10 for good context window)
+# NODE 12 — Responder (70b)
 # ═══════════════════════════════════════════════════════════════════════════════
 async def responder(state: AgentState) -> AgentState:
     system = IDENTITY_PROMPT.format(app_navigation=APP_NAVIGATION)
     lc_messages = [SystemMessage(content=f"{system}\n\n{state['career_context']}")]
 
-    # FIX 2: Only use frontend messages — removed the DB session_history loop
-    # Frontend already sends full conversation history, no need to double-send
     for m in state["messages"][-10:]:
         if m["role"] == "user":
             lc_messages.append(HumanMessage(content=m["content"]))
@@ -658,7 +694,6 @@ async def responder(state: AgentState) -> AgentState:
 
     state["final_response"] = full_response
 
-    # FIX 5: Log usage to Supabase for monitor dashboard
     input_estimate = sum(len(m.content) for m in lc_messages) // 4
     output_estimate = len(full_response) // 4
     asyncio.create_task(log_api_usage("chat", "llama-3.3-70b-versatile", input_estimate, output_estimate, state["user_id"]))
@@ -668,7 +703,7 @@ async def responder(state: AgentState) -> AgentState:
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # NODE 13 — Emotional Responder
-# FIX 3: Moved from 70b to 8b
+# FIX: No probing questions. Acknowledge and move. Pidgin-aware.
 # ═══════════════════════════════════════════════════════════════════════════════
 async def emotional_responder(state: AgentState) -> AgentState:
     profile = state["profile"] or {}
@@ -676,20 +711,24 @@ async def emotional_responder(state: AgentState) -> AgentState:
 
     prompt = f"""You are ALGO — a career assistant who actually cares.
 {"User's name is " + name + "." if name else ""}
+
+The user is venting, frustrated, or emotionally reacting — possibly in Nigerian Pidgin or informal English.
+
 RULES:
-- Acknowledge the emotion in ONE sentence. Be human, not corporate.
-- No bullet points. No headers. No action items yet.
-- Do NOT say "I can sense your frustration".
-- Ask ONE genuine question to understand what happened.
-- Max 3 sentences total."""
+- Acknowledge the emotion in ONE short sentence. Be human, direct, not corporate.
+- Do NOT ask probing questions like "what happened?" or "can you tell me more?"
+- Do NOT say "I can sense your frustration" or any therapy-speak.
+- If they're venting about a rejection or job search, one short line of solidarity is enough. Something like "That one stings." or "Yeah, that's rough."
+- Then in ONE sentence, offer to help them figure out the next move — keep it natural, not pushy.
+- Max 2 sentences total. No questions. No bullet points. No headers."""
 
     full_response = ""
-    # FIX 3: Use llm_fast (8b) — empathy doesn't need 70b
     async for chunk in llm_fast.astream([SystemMessage(content=prompt), HumanMessage(content=state["user_message"])]):
         if chunk.content:
             full_response += chunk.content
 
     state["final_response"] = full_response
+    asyncio.create_task(log_api_usage("chat_emotional", "llama-3.1-8b-instant", 150, len(full_response) // 4, state["user_id"]))
     return state
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -879,7 +918,6 @@ async def chat(req: ChatRequest):
 
         yield "data: [DONE]\n\n"
 
-        # Save conversation to DB after streaming
         try:
             supabase.from_("coach_conversations").insert({
                 "user_id": req.user_id,
@@ -1117,14 +1155,12 @@ async def interview_responder(state: InterviewState) -> InterviewState:
             lc_messages.append(AIMessage(content=m["content"]))
 
     full_response = ""
-    # FIX 1: Use llm_interview (Account 2) — dedicated interview account
     async for chunk in llm_interview.astream(lc_messages):
         if chunk.content:
             full_response += chunk.content
 
     state["final_response"] = full_response
 
-    # FIX 5: Log interview usage
     input_estimate = sum(len(m.content) for m in lc_messages) // 4
     output_estimate = len(full_response) // 4
     asyncio.create_task(log_api_usage("interview", "llama-3.3-70b-versatile", input_estimate, output_estimate, state["user_id"]))
@@ -1230,7 +1266,6 @@ Return ONLY valid JSON:
   "coach_note": "<motivational note>"
 }}"""
 
-        # FIX 1: Use llm_interview account for feedback too
         feedback_llm = ChatGroq(
             api_key=os.getenv("GROQ_API_KEY_INTERVIEW"),
             model="llama-3.3-70b-versatile",
@@ -1244,7 +1279,6 @@ Return ONLY valid JSON:
         raw = response.content.strip().replace("```json", "").replace("```", "").strip()
         feedback = json.loads(raw)
 
-        # FIX 5: Log feedback usage
         asyncio.create_task(log_api_usage("interview_feedback", "llama-3.3-70b-versatile", len(feedback_prompt) // 4, len(raw) // 4, req.user_id))
 
         try:
@@ -1264,11 +1298,10 @@ Return ONLY valid JSON:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Usage Stats Endpoint — for monitor dashboard
+# Usage Stats Endpoint
 # ═══════════════════════════════════════════════════════════════════════════════
 @app.get("/usage/today")
 async def usage_today():
-    """Returns today's API usage stats for the monitor dashboard"""
     try:
         today = datetime.datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
         res = supabase.from_("api_usage").select("feature, model, input_tokens, output_tokens, total_tokens") \
