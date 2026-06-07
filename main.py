@@ -704,12 +704,39 @@ async def responder(state: AgentState) -> AgentState:
 # ═══════════════════════════════════════════════════════════════════════════════
 # NODE 13 — Emotional Responder
 # FIX: No probing questions. Acknowledge and move. Pidgin-aware.
-# ═══════════════════════════════════════════════════════════════════════════════
+
 async def emotional_responder(state: AgentState) -> AgentState:
     profile = state["profile"] or {}
     name = profile.get("full_name", "").split()[0] if profile.get("full_name") else ""
+    msg = state["user_message"].lower()
 
-    prompt = f"""You are ALGO — a career assistant who actually cares.
+    # Detect "done for today / need a break" signals — don't push, just acknowledge
+    done_signals = [
+        "i am done", "i'm done", "done for today", "done for now",
+        "i need a break", "taking a break", "i'm tired", "i am tired",
+        "too tired", "exhausted", "i give up", "giving up", "e don do",
+        "i can't anymore", "i cant anymore", "not today", "not doing this today",
+        "forget it", "nevermind", "nvm",
+    ]
+    is_done_signal = any(sig in msg for sig in done_signals)
+
+    if is_done_signal:
+        # Pure acknowledgment — no push, no task, no question
+        prompt = f"""You are ALGO — a career assistant who actually listens.
+{"User's name is " + name + "." if name else ""}
+The user is saying they're done for today or need a break from job hunting.
+
+RULES:
+- Acknowledge it simply. That's it.
+- Do NOT suggest any next steps, tasks, or actions.
+- Do NOT ask any questions.
+- Do NOT say "I'm here when you're ready" or any variation of that — it's pushy.
+- Just let them rest. One short human sentence. Max 10 words.
+- Examples of good responses: "Take the rest. You've put in the work." / "Rest up. Job hunting can wait." / "Yeah, step away. It'll still be here."
+- Never sound corporate or like a support bot."""
+    else:
+        # Regular emotional venting — acknowledge + one soft offer (no questions)
+        prompt = f"""You are ALGO — a career assistant who actually cares.
 {"User's name is " + name + "." if name else ""}
 
 The user is venting, frustrated, or emotionally reacting — possibly in Nigerian Pidgin or informal English.
@@ -718,8 +745,8 @@ RULES:
 - Acknowledge the emotion in ONE short sentence. Be human, direct, not corporate.
 - Do NOT ask probing questions like "what happened?" or "can you tell me more?"
 - Do NOT say "I can sense your frustration" or any therapy-speak.
-- If they're venting about a rejection or job search, one short line of solidarity is enough. Something like "That one stings." or "Yeah, that's rough."
-- Then in ONE sentence, offer to help them figure out the next move — keep it natural, not pushy.
+- One short line of solidarity. Something like "That one stings." or "Yeah, that's rough."
+- Then ONE sentence max — offer to help them think through next move. Keep it natural, not pushy.
 - Max 2 sentences total. No questions. No bullet points. No headers."""
 
     full_response = ""
