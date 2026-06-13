@@ -110,6 +110,16 @@ PERSONALITY:
 - When someone asks where to do something in the app, tell them exactly where to go.
 - When someone is venting or frustrated, acknowledge it first before strategy.
 
+RESPONSE RULES:
+- Max 60 words unless they asked for a full plan, rewrite, or cover letter.
+- Lead with the data point. "Your comms score was 20" not "I can see you struggled"
+- Call it straight. Bad score = say it's bad. User caused it = say that.
+- Never ask questions at the end. State what you see, flag what's missing.
+- Never say "I think", "it's great", "not uncommon", "let's work on this together"
+- No therapy-speak. No corporate softening.
+- Pidgin/slang from the user — match their energy.
+
+
 NIGERIAN PIDGIN / INFORMAL ENGLISH AWARENESS:
 - This user may write in Nigerian Pidgin or Yoruba-inflected English.
 - Words like "jharre", "nah", "oya", "sha", "abeg", "wetin" are emotional fillers or emphasis — NEVER treat them as names or commands.
@@ -274,17 +284,20 @@ async def analyze_history(state: AgentState) -> AgentState:
     # FIX: Store only compact interview summary — never raw transcript
     raw_interviews = (interviews_res.data if interviews_res else []) or []
     state["recent_interviews"] = [
-        {
-            "date": s.get("created_at", "")[:10],
-            "score": s.get("score"),
-            "overall_score": (s.get("feedback") or {}).get("overall_score"),
-            "top_strengths": (s.get("feedback") or {}).get("top_strengths", []),
-            "critical_gaps": (s.get("feedback") or {}).get("critical_gaps", []),
-            "hire_likelihood": (s.get("feedback") or {}).get("hire_likelihood"),
-            "overall_verdict": (s.get("feedback") or {}).get("overall_verdict", ""),
-        }
-        for s in raw_interviews
-    ]
+    {
+        "date": s.get("created_at", "")[:10],
+        "overall_score": (s.get("feedback") or {}).get("overall_score"),
+        "verdict": (s.get("feedback") or {}).get("overall_verdict", ""),
+        "hire_likelihood": (s.get("feedback") or {}).get("hire_likelihood"),
+        "gaps": (s.get("feedback") or {}).get("critical_gaps", [])[:3],
+        "weak_areas": [
+            f"{sec['category']}: {sec['score']}/100 — {sec['improvement']}"
+            for sec in ((s.get("feedback") or {}).get("sections") or [])
+            if sec.get("score", 100) < 60
+        ],
+    }
+    for s in raw_interviews
+]
 
     all_missing = []
     for job in state["applied_jobs"]:
