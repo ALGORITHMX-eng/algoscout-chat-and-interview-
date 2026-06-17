@@ -729,7 +729,7 @@ async def emotional_responder(state: AgentState) -> AgentState:
     ]
     is_done_signal = any(sig in msg for sig in done_signals)
 
-    if is_done_signal:
+        if is_done_signal:
         # Pure acknowledgment — no push, no task, no question
         prompt = f"""You are ALGO — a career assistant who actually listens.
 {"User's name is " + name + "." if name else ""}
@@ -743,7 +743,8 @@ RULES:
 - Just let them rest. One short human sentence. Max 10 words.
 - Examples of good responses: "Take the rest. You've put in the work." / "Rest up. Job hunting can wait." / "Yeah, step away. It'll still be here."
 - Never sound corporate or like a support bot."""
-        else:
+
+    else:
         # Regular emotional venting
         prompt = f"""You are ALGO — a career assistant who actually cares.
 {"User's name is " + name + "." if name else ""}
@@ -765,7 +766,6 @@ RULES:
     state["final_response"] = full_response
     asyncio.create_task(log_api_usage("chat_emotional", "llama-3.1-8b-instant", 150, len(full_response) // 4, state["user_id"]))
     return state
-
 # ═══════════════════════════════════════════════════════════════════════════════
 # Build the Chat Graph
 # ═══════════════════════════════════════════════════════════════════════════════
