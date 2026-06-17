@@ -729,7 +729,7 @@ async def emotional_responder(state: AgentState) -> AgentState:
     ]
     is_done_signal = any(sig in msg for sig in done_signals)
 
-        if is_done_signal:
+    if is_done_signal:
         # Pure acknowledgment — no push, no task, no question
         prompt = f"""You are ALGO — a career assistant who actually listens.
 {"User's name is " + name + "." if name else ""}
