@@ -237,19 +237,22 @@ async def analyze_history(state: AgentState) -> AgentState:
         state["profile_update"] = None
         return state
 
-    def fetch_applied():
-        try:
-            return supabase.from_("jobs").select("company, role, score, score_reason, score_breakdown") \
-                .eq("user_id", user_id).eq("status", "approved") \
-                .order("found_at", desc=True).limit(5).execute()
-        except: return None
+   def fetch_applied():
+    try:
+        return supabase.from_("user_jobs") \
+            .select("personal_score, score_reason, jobs_master(role, company, location, core_skills)") \
+            .eq("user_id", user_id).eq("status", "approved") \
+            .order("personal_score", desc=True).limit(5).execute()
+    except: return None
 
-    def fetch_pending():
-        try:
-            return supabase.from_("jobs").select("company, role, score, location") \
-                .eq("user_id", user_id).eq("status", "pending").gte("score", 7) \
-                .order("score", desc=True).limit(5).execute()
-        except: return None
+def fetch_pending():
+    try:
+        return supabase.from_("user_jobs") \
+            .select("personal_score, score_reason, jobs_master(role, company, location)") \
+            .eq("user_id", user_id).eq("status", "pending") \
+            .gte("personal_score", 7) \
+            .order("personal_score", desc=True).limit(5).execute()
+    except: return None
 
     def fetch_conclusions():
         try:
@@ -272,8 +275,14 @@ async def analyze_history(state: AgentState) -> AgentState:
         asyncio.to_thread(fetch_interviews),
     )
 
-    state["applied_jobs"] = (applied_res.data if applied_res else None) or []
-    state["pending_jobs"] = (pending_res.data if pending_res else None) or []
+    def flat(row, status):
+    j = row.get("jobs_master") or {}
+    return {"company": j.get("company",""), "role": j.get("role",""),
+            "score": row.get("personal_score", 0), "score_reason": row.get("score_reason",""),
+            "core_skills": j.get("core_skills",[]), "status": status}
+
+state["applied_jobs"] = [flat(r, "approved") for r in (applied_res.data or [])]
+state["pending_jobs"] = [flat(r, "pending") for r in (pending_res.data or [])]
     state["session_history"] = []
     state["previous_conclusions"] = (conclusions_res.data.get("conclusions", {}) if conclusions_res and conclusions_res.data else {})
     state["rejected_jobs"] = []
