@@ -237,7 +237,7 @@ async def analyze_history(state: AgentState) -> AgentState:
         state["profile_update"] = None
         return state
 
-   def fetch_applied():
+    def fetch_applied():
         try:
             return supabase.from_("user_jobs") \
                 .select("personal_score, score_reason, jobs_master(role, company, location, core_skills)") \
