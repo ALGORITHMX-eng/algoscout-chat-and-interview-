@@ -83,6 +83,7 @@ class AgentState(TypedDict):
     previous_conclusions: Optional[dict]
     profile_update: Optional[dict]
     final_response: Optional[str]
+    _cache_hit: Optional[bool]
 
 class ChatRequest(BaseModel):
     user_id: str
@@ -182,9 +183,13 @@ async def log_api_usage(feature: str, model: str, input_tokens: int, output_toke
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # NODE 1 — Retrieve Profile + Resume
+# FIX: Session-level cache — only fetch once per session, reuse on every
+#      subsequent message in that session unless cache_dirty is set (which
+#      happens automatically after a profile update).
 # ═══════════════════════════════════════════════════════════════════════════════
 async def retrieve_profile(state: AgentState) -> AgentState:
     user_id = state["user_id"]
+    session_id = state["session_id"]
     msg = state["user_message"].lower().strip()
 
     greeting_words = ["hi", "hey", "hello", "what's up", "whats up", "morning", "afternoon", "evening", "yo", "sup"]
@@ -192,8 +197,29 @@ async def retrieve_profile(state: AgentState) -> AgentState:
     if is_greeting:
         state["profile"] = {}
         state["resume"] = None
+        state["_cache_hit"] = False
         print(f"[node:retrieve_profile] greeting detected — skipped DB fetch")
         return state
+
+    def fetch_cache():
+        try:
+            return supabase.from_("session_conclusions").select("cached_data, cache_dirty") \
+                .eq("user_id", user_id).eq("session_id", session_id).single().execute()
+        except:
+            return None
+
+    cache_res = await asyncio.to_thread(fetch_cache)
+    cached = cache_res.data if cache_res else None
+
+    if cached and cached.get("cached_data") and not cached.get("cache_dirty", True):
+        data = cached["cached_data"]
+        state["profile"] = data.get("profile") or {}
+        state["resume"] = data.get("resume")
+        state["_cache_hit"] = True
+        print(f"[node:retrieve_profile] cache hit — skipped Supabase fetch")
+        return state
+
+    state["_cache_hit"] = False
 
     def fetch_profile():
         try:
@@ -215,15 +241,18 @@ async def retrieve_profile(state: AgentState) -> AgentState:
 
     state["profile"] = (profile_res.data if profile_res else None) or {}
     state["resume"] = (resume_res.data[0] if resume_res and resume_res.data else None)
-    print(f"[node:retrieve_profile] {state['profile'].get('full_name', 'unknown')}")
+    print(f"[node:retrieve_profile] fresh fetch — {state['profile'].get('full_name', 'unknown')}")
     return state
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # NODE 2 — Analyze History
-# FIX: Now fetches interview summaries (not full transcripts) from Supabase
+# FIX: Reuses cached applied/pending/interview data when retrieve_profile hit
+#      the session cache. Only re-fetches from Supabase on a cache miss or
+#      after the cache has been marked dirty (e.g. after a profile update).
 # ═══════════════════════════════════════════════════════════════════════════════
 async def analyze_history(state: AgentState) -> AgentState:
     user_id = state["user_id"]
+    session_id = state["session_id"]
 
     profile = state.get("profile") or {}
     if not profile and not state.get("user_message", ""):
@@ -236,6 +265,29 @@ async def analyze_history(state: AgentState) -> AgentState:
         state["recent_interviews"] = []
         state["profile_update"] = None
         return state
+
+    if state.get("_cache_hit"):
+        def fetch_cache():
+            try:
+                return supabase.from_("session_conclusions").select("cached_data, conclusions") \
+                    .eq("user_id", user_id).eq("session_id", session_id).single().execute()
+            except:
+                return None
+
+        cache_res = await asyncio.to_thread(fetch_cache)
+        cached = cache_res.data if cache_res else None
+        if cached and cached.get("cached_data"):
+            data = cached["cached_data"]
+            state["applied_jobs"] = data.get("applied_jobs", [])
+            state["pending_jobs"] = data.get("pending_jobs", [])
+            state["recent_interviews"] = data.get("recent_interviews", [])
+            state["skills_gap"] = data.get("skills_gap", [])
+            state["previous_conclusions"] = cached.get("conclusions", {}) or {}
+            state["rejected_jobs"] = []
+            state["session_history"] = []
+            state["profile_update"] = None
+            print(f"[node:analyze_history] cache hit — applied={len(state['applied_jobs'])}")
+            return state
 
     def fetch_applied():
         try:
@@ -257,10 +309,10 @@ async def analyze_history(state: AgentState) -> AgentState:
     def fetch_conclusions():
         try:
             return supabase.from_("session_conclusions").select("conclusions") \
-                .eq("user_id", user_id).eq("session_id", state["session_id"]).single().execute()
+                .eq("user_id", user_id).eq("session_id", session_id).single().execute()
         except: return None
 
-    # FIX: Fetch interview summaries — only score + feedback fields, not full messages
+    # Fetch interview summaries — only score + feedback fields, not full messages
     def fetch_interviews():
         try:
             return supabase.from_("interview_sessions").select(
@@ -288,23 +340,23 @@ async def analyze_history(state: AgentState) -> AgentState:
     state["rejected_jobs"] = []
     state["profile_update"] = None
 
-    # FIX: Store only compact interview summary — never raw transcript
+    # Store only compact interview summary — never raw transcript
     raw_interviews = (interviews_res.data if interviews_res else []) or []
     state["recent_interviews"] = [
-    {
-        "date": s.get("created_at", "")[:10],
-        "overall_score": (s.get("feedback") or {}).get("overall_score"),
-        "verdict": (s.get("feedback") or {}).get("overall_verdict", ""),
-        "hire_likelihood": (s.get("feedback") or {}).get("hire_likelihood"),
-        "gaps": (s.get("feedback") or {}).get("critical_gaps", [])[:3],
-        "weak_areas": [
-            f"{sec['category']}: {sec['score']}/100 — {sec['improvement']}"
-            for sec in ((s.get("feedback") or {}).get("sections") or [])
-            if sec.get("score", 100) < 60
-        ],
-    }
-    for s in raw_interviews
-]
+        {
+            "date": s.get("created_at", "")[:10],
+            "overall_score": (s.get("feedback") or {}).get("overall_score"),
+            "verdict": (s.get("feedback") or {}).get("overall_verdict", ""),
+            "hire_likelihood": (s.get("feedback") or {}).get("hire_likelihood"),
+            "gaps": (s.get("feedback") or {}).get("critical_gaps", [])[:3],
+            "weak_areas": [
+                f"{sec['category']}: {sec['score']}/100 — {sec['improvement']}"
+                for sec in ((s.get("feedback") or {}).get("sections") or [])
+                if sec.get("score", 100) < 60
+            ],
+        }
+        for s in raw_interviews
+    ]
 
     all_missing = []
     for job in state["applied_jobs"]:
@@ -315,7 +367,39 @@ async def analyze_history(state: AgentState) -> AgentState:
             except: pass
     state["skills_gap"] = [s for s, _ in Counter(all_missing).most_common(10)]
 
-    print(f"[node:analyze_history] applied={len(state['applied_jobs'])} interviews={len(state['recent_interviews'])}")
+    # Write fresh data back into session cache, mark clean
+    cache_blob = {
+        "profile": state["profile"],
+        "resume": state["resume"],
+        "applied_jobs": state["applied_jobs"],
+        "pending_jobs": state["pending_jobs"],
+        "recent_interviews": state["recent_interviews"],
+        "skills_gap": state["skills_gap"],
+    }
+
+    def upsert_cache():
+        try:
+            existing = supabase.from_("session_conclusions").select("id") \
+                .eq("user_id", user_id).eq("session_id", session_id).execute()
+            if existing.data:
+                supabase.from_("session_conclusions").update({
+                    "cached_data": cache_blob,
+                    "cache_dirty": False,
+                }).eq("user_id", user_id).eq("session_id", session_id).execute()
+            else:
+                supabase.from_("session_conclusions").insert({
+                    "user_id": user_id,
+                    "session_id": session_id,
+                    "conclusions": state["previous_conclusions"],
+                    "cached_data": cache_blob,
+                    "cache_dirty": False,
+                }).execute()
+        except Exception as e:
+            print(f"[node:analyze_history] cache write error: {e}")
+
+    asyncio.create_task(asyncio.to_thread(upsert_cache))
+
+    print(f"[node:analyze_history] fresh fetch — applied={len(state['applied_jobs'])} interviews={len(state['recent_interviews'])}")
     return state
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -375,6 +459,7 @@ def router(state: AgentState) -> str:
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # NODE 4 — Greeting Responder
+# FIX: Upgraded to 70b (llm_chat) — was sounding robotic on 8b.
 # ═══════════════════════════════════════════════════════════════════════════════
 async def greeting_responder(state: AgentState) -> AgentState:
     profile = state["profile"] or {}
@@ -391,12 +476,12 @@ RULES:
 - Max 2 sentences. Sound like a real person."""
 
     full_response = ""
-    async for chunk in llm_fast.astream([SystemMessage(content=prompt), HumanMessage(content=state["user_message"])]):
+    async for chunk in llm_chat.astream([SystemMessage(content=prompt), HumanMessage(content=state["user_message"])]):
         if chunk.content:
             full_response += chunk.content
 
     state["final_response"] = full_response
-    asyncio.create_task(log_api_usage("chat_greeting", "llama-3.1-8b-instant", 200, len(full_response) // 4, state["user_id"]))
+    asyncio.create_task(log_api_usage("chat_greeting", "llama-3.3-70b-versatile", 200, len(full_response) // 4, state["user_id"]))
     return state
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -488,6 +573,8 @@ Return ONLY the JSON. No explanation."""
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # NODE 7 — Profile Update Responder
+# FIX: Marks this session's cache dirty so the NEXT message re-fetches a
+#      fresh profile instead of serving the stale cached one.
 # ═══════════════════════════════════════════════════════════════════════════════
 async def profile_update_responder(state: AgentState) -> AgentState:
     update = state.get("profile_update")
@@ -514,6 +601,15 @@ Max 2 sentences. Sound like a real person."""
         state["final_response"] = result.content.strip()
     except:
         state["final_response"] = f"Got it — I've prepared the change to your {update['field_label']} for you to review below."
+
+    def mark_dirty():
+        try:
+            supabase.from_("session_conclusions").update({"cache_dirty": True}) \
+                .eq("user_id", state["user_id"]).eq("session_id", state["session_id"]).execute()
+        except Exception as e:
+            print(f"[profile_update_responder] dirty flag error: {e}")
+
+    asyncio.create_task(asyncio.to_thread(mark_dirty))
 
     return state
 
@@ -582,7 +678,6 @@ Experience:
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # NODE 10 — Apply Tooling
-# FIX: Injects interview summary context into career_context
 # ═══════════════════════════════════════════════════════════════════════════════
 async def apply_tooling(state: AgentState) -> AgentState:
     profile = state["profile"]
@@ -649,7 +744,7 @@ INTENT: {intent}
 INSTRUCTION: {intent_instructions}
 """.strip()
 
-    # FIX: Inject interview summary — compact format, no raw transcript
+    # Inject interview summary — compact format, no raw transcript
     if state.get("recent_interviews"):
         interview_lines = "\n".join([
             f"• {i['date']} — Score: {i.get('overall_score', 'N/A')}/100 | "
@@ -723,12 +818,27 @@ async def responder(state: AgentState) -> AgentState:
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # NODE 13 — Emotional Responder
-# FIX: No probing questions. Acknowledge and move. Pidgin-aware.
-
+# FIX 1: Upgraded to 70b (llm_chat) — was sounding robotic on 8b.
+# FIX 2: Now injects REAL profile/job data into the prompt so the model can
+#        no longer hallucinate GPA, years of experience, or scores that were
+#        never in the candidate's profile. No probing questions. Pidgin-aware.
+# ═══════════════════════════════════════════════════════════════════════════════
 async def emotional_responder(state: AgentState) -> AgentState:
     profile = state["profile"] or {}
     name = profile.get("full_name", "").split()[0] if profile.get("full_name") else ""
     msg = state["user_message"].lower()
+
+    applied_jobs = state.get("applied_jobs") or []
+    skills = ", ".join(profile.get("skills", [])) or "not listed"
+    applied_summary = ", ".join(
+        f"{j['role']} at {j['company']} ({j['score']}/10)" for j in applied_jobs
+    ) or "none yet"
+
+    real_data_block = f"""
+REAL CANDIDATE DATA (use ONLY this — NEVER invent GPA, years of experience, or any score not shown here):
+Skills: {skills}
+Applied jobs: {applied_summary}
+"""
 
     # Detect "done for today / need a break" signals — don't push, just acknowledge
     done_signals = [
@@ -759,23 +869,23 @@ RULES:
         # Regular emotional venting
         prompt = f"""You are ALGO — a career assistant who actually cares.
 {"User's name is " + name + "." if name else ""}
-
+{real_data_block}
 The user is venting or frustrated about job search (possibly in pidgin).
 
 RULES:
 - Acknowledge in one short natural sentence. Sound like a sharp Naija guy.
 - Use light emoji where it fits (😂, 😭, 💪, 🔥).
 - Be direct. Never say "that one stings" or "that's rough".
-- Then one sentence max about next move using their actual data (scores, skills, applied jobs).
+- Then one sentence max about next move using ONLY the REAL CANDIDATE DATA above — never invent GPA, scores, or experience not listed there.
 - Total max 2 sentences. Match their energy. No questions."""
 
     full_response = ""
-    async for chunk in llm_fast.astream([SystemMessage(content=prompt), HumanMessage(content=state["user_message"])]):
+    async for chunk in llm_chat.astream([SystemMessage(content=prompt), HumanMessage(content=state["user_message"])]):
         if chunk.content:
             full_response += chunk.content
 
     state["final_response"] = full_response
-    asyncio.create_task(log_api_usage("chat_emotional", "llama-3.1-8b-instant", 150, len(full_response) // 4, state["user_id"]))
+    asyncio.create_task(log_api_usage("chat_emotional", "llama-3.3-70b-versatile", 150, len(full_response) // 4, state["user_id"]))
     return state
 # ═══════════════════════════════════════════════════════════════════════════════
 # Build the Chat Graph
@@ -937,6 +1047,7 @@ async def chat(req: ChatRequest):
             "previous_conclusions": {},
             "profile_update": None,
             "final_response": None,
+            "_cache_hit": None,
         }
 
         final_state = await algo_graph.ainvoke(initial_state)
@@ -1003,6 +1114,14 @@ async def update_profile(req: ProfileUpdateRequest):
         supabase.from_("profiles").update(
             {req.field: req.value}
         ).eq("user_id", req.user_id).execute()
+
+        # Mark ALL of this user's sessions dirty since profile changed outside chat
+        try:
+            supabase.from_("session_conclusions").update({"cache_dirty": True}) \
+                .eq("user_id", req.user_id).execute()
+        except Exception as e:
+            print(f"[profile_endpoint] dirty flag error: {e}")
+
         return {"success": True, "field": req.field, "value": req.value}
     except Exception as e:
         await log_event("error", f"Profile update failed: {str(e)}", "profile_endpoint")
@@ -1011,6 +1130,9 @@ async def update_profile(req: ProfileUpdateRequest):
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # INTERVIEW GRAPH
+# FIX: Interview state now also caches profile/resume per interview session_id
+#      so it isn't re-fetched on every single message exchange — only on the
+#      first message of the interview session, unless flagged dirty.
 # ═══════════════════════════════════════════════════════════════════════════════
 class InterviewState(TypedDict):
     user_id: str
@@ -1052,6 +1174,31 @@ RULES:
 
 async def interview_retrieve_profile(state: InterviewState) -> InterviewState:
     user_id = state["user_id"]
+    session_id = state["session_id"]
+
+    # Only fetch profile+resume fresh on the FIRST message of this interview
+    # session (no prior assistant turns yet). After that, reuse what's
+    # already loaded onto the interview_sessions row to avoid re-querying
+    # Supabase on every single back-and-forth turn.
+    prior_assistant_msgs = [m for m in state["messages"] if m.get("role") == "assistant"]
+    is_first_message = len(prior_assistant_msgs) == 0
+
+    if not is_first_message:
+        def fetch_session_cache():
+            try:
+                return supabase.from_("interview_sessions").select("cached_profile, cached_resume") \
+                    .eq("id", session_id).single().execute()
+            except:
+                return None
+
+        cache_res = await asyncio.to_thread(fetch_session_cache)
+        cached = cache_res.data if cache_res else None
+        if cached and cached.get("cached_profile") is not None:
+            state["profile"] = cached.get("cached_profile") or {}
+            state["resume"] = cached.get("cached_resume")
+            print(f"[interview:retrieve_profile] cache hit — skipped Supabase fetch")
+            return state
+
     try:
         res = supabase.from_("profiles").select("*").eq("user_id", user_id).single().execute()
         state["profile"] = res.data or {}
@@ -1063,6 +1210,30 @@ async def interview_retrieve_profile(state: InterviewState) -> InterviewState:
         state["resume"] = res.data[0] if res.data else None
     except:
         state["resume"] = None
+
+    # Stash onto the interview session row for reuse on subsequent turns
+    def cache_profile():
+        try:
+            existing = supabase.from_("interview_sessions").select("id").eq("id", session_id).execute()
+            if existing.data:
+                supabase.from_("interview_sessions").update({
+                    "cached_profile": state["profile"],
+                    "cached_resume": state["resume"],
+                }).eq("id", session_id).execute()
+            else:
+                supabase.from_("interview_sessions").insert({
+                    "id": session_id,
+                    "user_id": user_id,
+                    "job_id": state.get("job_id"),
+                    "interview_type": "technical",
+                    "cached_profile": state["profile"],
+                    "cached_resume": state["resume"],
+                }).execute()
+        except Exception as e:
+            print(f"[interview:retrieve_profile] cache write error: {e}")
+
+    asyncio.create_task(asyncio.to_thread(cache_profile))
+    print(f"[interview:retrieve_profile] fresh fetch")
     return state
 
 async def load_job_context(state: InterviewState) -> InterviewState:
@@ -1374,10 +1545,8 @@ if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
 
 
-    # ═══════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════════
 # AUTO-APPLY GRAPH
-# Append this entire block to the bottom of main.py (above the if __name__ block)
-#
 # Flow:
 #   fetch_job_and_profile
 #     → detect_platform
