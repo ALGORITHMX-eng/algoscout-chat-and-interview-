@@ -84,6 +84,7 @@ class AgentState(TypedDict):
     profile_update: Optional[dict]
     final_response: Optional[str]
     _cache_hit: Optional[bool]
+    _is_greeting: Optional[bool]
 
 class ChatRequest(BaseModel):
     user_id: str
@@ -198,6 +199,7 @@ async def retrieve_profile(state: AgentState) -> AgentState:
         state["profile"] = {}
         state["resume"] = None
         state["_cache_hit"] = False
+        state["_is_greeting"] = True
         print(f"[node:retrieve_profile] greeting detected — skipped DB fetch")
         return state
 
@@ -264,6 +266,22 @@ async def analyze_history(state: AgentState) -> AgentState:
         state["rejected_jobs"] = []
         state["recent_interviews"] = []
         state["profile_update"] = None
+        return state
+
+    # Greeting turns deliberately skip the real profile fetch in
+    # retrieve_profile, so we must NOT run the heavy fetch here or write a
+    # cache entry — doing so would permanently cache an empty profile for
+    # this session and poison every later message. Just return light defaults.
+    if state.get("_is_greeting"):
+        state["applied_jobs"] = []
+        state["pending_jobs"] = []
+        state["session_history"] = []
+        state["skills_gap"] = []
+        state["previous_conclusions"] = {}
+        state["rejected_jobs"] = []
+        state["recent_interviews"] = []
+        state["profile_update"] = None
+        print(f"[node:analyze_history] greeting turn — skipped fetch + cache write")
         return state
 
     if state.get("_cache_hit"):
@@ -1048,6 +1066,7 @@ async def chat(req: ChatRequest):
             "profile_update": None,
             "final_response": None,
             "_cache_hit": None,
+            "_is_greeting": None,
         }
 
         final_state = await algo_graph.ainvoke(initial_state)
