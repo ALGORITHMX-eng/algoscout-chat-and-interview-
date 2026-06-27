@@ -427,10 +427,28 @@ async def analyze_history(state: AgentState) -> AgentState:
 # ═══════════════════════════════════════════════════════════════════════════════
 async def smart_classifier(state: AgentState) -> AgentState:
     msg = state["user_message"]
+    msg_lower = msg.lower().strip()
 
     # Check if this is truly a first message (no prior assistant turns)
     prior_assistant_msgs = [m for m in state["messages"] if m["role"] == "assistant"]
     is_first_message = len(prior_assistant_msgs) == 0
+
+    # SAFETY NET: catch obvious profile-update phrasing with a cheap regex
+    # before even calling the LLM. This guarantees "add X to my skills" type
+    # messages always route correctly regardless of what the 8b classifier
+    # decides — closes the exact bug where "add Docker to my skills" got
+    # misrouted to "career" and triggered a false "I don't have that" reply.
+    profile_update_patterns = [
+        r"\badd\b.{0,40}\bto my (skills|profile|target roles|resume)\b",
+        r"\bupdate my (skills|profile|location|work preference|years? of experience|linkedin|github|portfolio|bio|summary|target roles)\b",
+        r"\bremove\b.{0,40}\bfrom my (skills|profile|target roles)\b",
+        r"\bchange my (location|work preference|years? of experience|linkedin|github|portfolio|bio|summary)\b",
+        r"\bset my (location|work preference|years? of experience)\b",
+    ]
+    if any(re.search(p, msg_lower) for p in profile_update_patterns):
+        state["detected_route"] = "profile_update"
+        print(f"[node:smart_classifier] route=profile_update (regex pre-check) msg='{msg[:50]}'")
+        return state
 
     classify_prompt = f"""Classify this message into exactly one category.
 
@@ -447,6 +465,16 @@ CATEGORIES:
 - "off_topic" → coding help unrelated to career, recipes, weather, sports scores, news
 - "profile_update" → wants to add, update, change, or remove something from their profile: skills, target roles, years of experience, work preference, location, bio/summary, LinkedIn, GitHub, portfolio
 - "career" → everything else: job questions, resume help, interview prep, salary, skills, app navigation, AlgoScout features, career strategy, rejection analysis
+
+EXAMPLES:
+Message: "add Docker to my skills" → profile_update
+Message: "remove React from my skills" → profile_update
+Message: "update my location to Lagos" → profile_update
+Message: "I want to target Backend Engineer roles too" → profile_update
+Message: "wetin dey happen with my dashboard" → career
+Message: "fuck this job market jharre" → emotional
+Message: "what's the weather like today" → off_topic
+Message: "hey" (first message) → greeting
 
 Message: "{msg}"
 
