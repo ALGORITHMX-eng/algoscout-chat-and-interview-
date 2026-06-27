@@ -444,6 +444,13 @@ async def smart_classifier(state: AgentState) -> AgentState:
         r"\bremove\b.{0,40}\bfrom my (skills|profile|target roles)\b",
         r"\bchange my (location|work preference|years? of experience|linkedin|github|portfolio|bio|summary)\b",
         r"\bset my (location|work preference|years? of experience)\b",
+        # Looser catches for implied "add this to my skills" phrasing that
+        # doesn't literally say "to my skills" — e.g. "help me add Docker",
+        # "oya help me add browser automation", "help me add am nah" as a
+        # follow-up to a skill being discussed.
+        r"\bhelp me add\b",
+        r"\badd (am|it|that|this) nah\b",
+        r"\badd\b.{0,40}\b(skill|automation|docker|framework|tool|stack)\b",
     ]
     if any(re.search(p, msg_lower) for p in profile_update_patterns):
         state["detected_route"] = "profile_update"
@@ -547,9 +554,21 @@ async def profile_update_detector(state: AgentState) -> AgentState:
     profile = state["profile"] or {}
     msg = state["user_message"]
 
+    # Build a short recent-history block so the model can resolve pidgin
+    # pronouns like "am"/"it"/"that" back to whatever skill/field was
+    # actually being discussed a turn or two earlier — e.g. "help me add
+    # am nah" only makes sense with "browser automation" from a prior turn.
+    recent_turns = state["messages"][-6:] if state.get("messages") else []
+    history_lines = "\n".join([
+        f"{m['role'].upper()}: {m['content']}"
+        for m in recent_turns
+        if m.get("content") and m["content"] != "__ALGO_START__"
+    ])
+    history_block = f"\nRECENT CONVERSATION (use this to resolve pronouns like 'am', 'it', 'that' to the actual skill/value being discussed):\n{history_lines}\n" if history_lines else ""
+
     extract_prompt = f"""The user wants to update their career profile.
 Extract what they want to change and return ONLY valid JSON.
-
+{history_block}
 CURRENT PROFILE:
 skills: {profile.get('skills', [])}
 preferred_titles: {profile.get('preferred_titles', [])}
