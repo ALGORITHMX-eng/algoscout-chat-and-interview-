@@ -2020,14 +2020,14 @@ def build_apply_graph():
     graph.add_edge("apply_fetch", "apply_detect_platform")
 
     graph.add_conditional_edges(
-    "apply_path1",
-    path1_router,
-    {
-        "update_status": "apply_update_status",
-        "skyvern_fallback": "skyvern_fallback",  # unreachable for now
-        "error": "apply_error_handler",
-    }
-)
+        "apply_detect_platform",
+        apply_router,
+        {
+            "path1": "apply_path1",
+            "skyvern_fallback": "skyvern_fallback",
+            "error": "apply_error_handler",
+        }
+    )
 
     graph.add_conditional_edges(
         "apply_path1",
@@ -2035,6 +2035,7 @@ def build_apply_graph():
         {
             "update_status": "apply_update_status",
             "skyvern_fallback": "skyvern_fallback",
+            "error": "apply_error_handler",
         }
     )
 
