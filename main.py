@@ -1786,13 +1786,18 @@ async def apply_path1(state: ApplyState) -> ApplyState:
 
                 GREENHOUSE_ANSWERABLE = {
                     "first_name", "last_name", "email", "phone", "location",
-                    "resume", "cover_letter", "linkedin_url", "website",
+                    "resume", "cover_letter", "cover_letter_text", "linkedin_url",
+                    "website", "latitude", "longitude", "country_short_name",
                 }
 
                 unanswerable = [
-                    q.get("label") or q.get("name")
+                    q.get("label")
                     for q in questions
-                    if q.get("required") and q.get("name") not in GREENHOUSE_ANSWERABLE
+                    if q.get("required")
+                    and not any(
+                        f.get("name") in GREENHOUSE_ANSWERABLE
+                        for f in q.get("fields", [])
+                    )
                 ]
 
                 if unanswerable:
