@@ -1808,7 +1808,7 @@ async def apply_path1(state: ApplyState) -> ApplyState:
                     return state
 
                 res = await client.post(
-                    f"https://boards-api.greenhouse.io/v1/boards/{board_token}/jobs/{job_gh_id}/applications",
+                    f"https://boards-api.greenhouse.io/v1/boards/{board_token}/jobs/{job_gh_id}/apply",
                     json=payload,
                 )
 
