@@ -1789,7 +1789,7 @@ async def apply_path1(state: ApplyState) -> ApplyState:
                     if q.get("required") and q.get("name") not in payload
                 ]
 
-                 if unanswerable:
+                if unanswerable:
                     print(f"[apply:path1] unanswerable fields: {unanswerable} — falling back to Skyvern")
                     state["missing_fields"] = unanswerable
                     state["result"] = {"success": False, "reason": "unanswerable_fields", "missing_fields": unanswerable}
