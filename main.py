@@ -1773,20 +1773,25 @@ async def apply_path1(state: ApplyState) -> ApplyState:
 
                 payload = {
                     "first_name": (profile.get("full_name") or "").split()[0],
-                    "last_name": " ".join((profile.get("full_name") or "").split()[1:]),
+                    "last_name": " ".join((profile.get("full_name") or "").split()[1:]) or ".",
                     "email": profile.get("email"),
                     "phone": profile.get("phone"),
                     "location": profile.get("location"),
-                    "resume_url": resume_url,
-                    "cover_letter_text": job.get("cover_letter_notes") or "",
+                    "resume": resume_url,
+                    "cover_letter": job.get("cover_letter_notes") or "",
                     "linkedin_url": profile.get("linkedin") or "",
                     "website": profile.get("portfolio") or profile.get("github") or "",
+                }
+
+                GREENHOUSE_ANSWERABLE = {
+                    "first_name", "last_name", "email", "phone", "location",
+                    "resume", "cover_letter", "linkedin_url", "website",
                 }
 
                 unanswerable = [
                     q.get("label") or q.get("name")
                     for q in questions
-                    if q.get("required") and q.get("name") not in payload
+                    if q.get("required") and q.get("name") not in GREENHOUSE_ANSWERABLE
                 ]
 
                 if unanswerable:
