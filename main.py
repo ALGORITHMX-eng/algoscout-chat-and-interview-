@@ -1623,10 +1623,11 @@ if __name__ == "__main__":
 #           → update_status → END
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
+
 import httpx
 import re
 
-# ── Apply State ───────────────────────────────────────────────────────────────
 class ApplyState(TypedDict):
     job_id: str
     user_id: str
@@ -1639,35 +1640,38 @@ class ApplyState(TypedDict):
     used_fallback: Optional[bool]
     result: Optional[dict]
 
-# ── Apply Request ─────────────────────────────────────────────────────────────
 class ApplyRequest(BaseModel):
     job_id: str
     user_id: str
     resume_pdf_url: Optional[str] = None
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# NODE 1 — Fetch job + profile, validate
-# ═══════════════════════════════════════════════════════════════════════════════
 async def apply_fetch(state: ApplyState) -> ApplyState:
     def _job():
-        return supabase.from_("jobs").select("*").eq("id", state["job_id"]).single().execute()
+        return supabase.from_("jobs_master").select("*").eq("id", state["job_id"]).single().execute()
 
     def _profile():
         return supabase.from_("profiles").select("*").eq("user_id", state["user_id"]).single().execute()
 
-    job_res, profile_res = await asyncio.gather(
+    def _user_job():
+        return supabase.from_("user_jobs").select("resume_notes, cover_letter_notes") \
+            .eq("job_id", state["job_id"]).eq("user_id", state["user_id"]).single().execute()
+
+    job_res, profile_res, user_job_res = await asyncio.gather(
         asyncio.to_thread(_job),
         asyncio.to_thread(_profile),
+        asyncio.to_thread(_user_job),
     )
 
-    state["job"]     = job_res.data if job_res else None
+    state["job"] = job_res.data if job_res else None
     state["profile"] = profile_res.data if profile_res else None
+
+    if state["job"] and user_job_res and user_job_res.data:
+        state["job"]["cover_letter_notes"] = user_job_res.data.get("cover_letter_notes")
+        state["job"]["resume_notes"] = user_job_res.data.get("resume_notes")
+
     print(f"[apply:fetch] job={state['job_id']} user={state['user_id']}")
     return state
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# NODE 2 — Detect platform from job.source column
-# ═══════════════════════════════════════════════════════════════════════════════
 async def apply_detect_platform(state: ApplyState) -> ApplyState:
     job = state["job"]
     if not job:
@@ -1675,7 +1679,7 @@ async def apply_detect_platform(state: ApplyState) -> ApplyState:
         return state
 
     source = (job.get("source") or "").lower().strip()
-    url    = (job.get("job_url") or "").lower()
+    url = (job.get("job_url") or "").lower()
 
     if "greenhouse" in source or "greenhouse" in url:
         state["platform"] = "greenhouse"
@@ -1693,11 +1697,8 @@ async def apply_detect_platform(state: ApplyState) -> ApplyState:
     print(f"[apply:detect_platform] platform={state['platform']}")
     return state
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Router — guards + decides path1 vs skyvern_fallback
-# ═══════════════════════════════════════════════════════════════════════════════
 def apply_router(state: ApplyState) -> str:
-    job     = state.get("job")
+    job = state.get("job")
     profile = state.get("profile")
 
     if not job:
@@ -1717,9 +1718,9 @@ def apply_router(state: ApplyState) -> str:
 
     missing = []
     if not profile.get("full_name"): missing.append("full name")
-    if not profile.get("email"):     missing.append("email")
-    if not profile.get("phone"):     missing.append("phone number")
-    if not profile.get("location"):  missing.append("location")
+    if not profile.get("email"): missing.append("email")
+    if not profile.get("phone"): missing.append("phone number")
+    if not profile.get("location"): missing.append("location")
     if missing:
         state["result"] = {
             "error": f"Your profile is missing: {', '.join(missing)}. Please update your profile before applying.",
@@ -1733,13 +1734,9 @@ def apply_router(state: ApplyState) -> str:
         state["path"] = 1
         return "path1"
 
-    # Workday / Taleo / other → straight to Skyvern cloud
     state["path"] = 2
     return "skyvern_fallback"
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# NODE 3 — PATH 1: Direct API (Greenhouse / Lever / Ashby)
-# ═══════════════════════════════════════════════════════════════════════════════
 def _gh_ids(url: str):
     m = re.search(r'greenhouse\.io/([^/]+)/jobs/(\d+)', url)
     return (m.group(1), m.group(2)) if m else (None, None)
@@ -1753,39 +1750,35 @@ def _ashby_id(url: str):
     return m.group(1) if m else None
 
 async def apply_path1(state: ApplyState) -> ApplyState:
-    job        = state["job"]
-    profile    = state["profile"]
-    platform   = state["platform"]
+    job = state["job"]
+    profile = state["profile"]
+    platform = state["platform"]
     resume_url = state.get("resume_pdf_url") or ""
 
     try:
         async with httpx.AsyncClient(timeout=30) as client:
-
-            # ── Greenhouse ────────────────────────────────────────────────────
             if platform == "greenhouse":
                 board_token, job_gh_id = _gh_ids(job["job_url"])
                 if not board_token or not job_gh_id:
                     raise ValueError("Could not extract Greenhouse board token or job ID")
 
-                # Fetch job questions
                 meta = await client.get(
                     f"https://boards-api.greenhouse.io/v1/boards/{board_token}/jobs/{job_gh_id}?questions=true"
                 )
                 questions = meta.json().get("questions", [])
 
                 payload = {
-                    "first_name":        (profile.get("full_name") or "").split()[0],
-                    "last_name":         " ".join((profile.get("full_name") or "").split()[1:]),
-                    "email":             profile.get("email"),
-                    "phone":             profile.get("phone"),
-                    "location":          profile.get("location"),
-                    "resume_url":        resume_url,
+                    "first_name": (profile.get("full_name") or "").split()[0],
+                    "last_name": " ".join((profile.get("full_name") or "").split()[1:]),
+                    "email": profile.get("email"),
+                    "phone": profile.get("phone"),
+                    "location": profile.get("location"),
+                    "resume_url": resume_url,
                     "cover_letter_text": job.get("cover_letter_notes") or "",
-                    "linkedin_url":      profile.get("linkedin") or "",
-                    "website":           profile.get("portfolio") or profile.get("github") or "",
+                    "linkedin_url": profile.get("linkedin") or "",
+                    "website": profile.get("portfolio") or profile.get("github") or "",
                 }
 
-                # Check for unanswerable required custom questions
                 unanswerable = [
                     q.get("label") or q.get("name")
                     for q in questions
@@ -1793,7 +1786,6 @@ async def apply_path1(state: ApplyState) -> ApplyState:
                 ]
 
                 if unanswerable:
-                    # Can't answer required fields — fall through to Skyvern
                     print(f"[apply:path1] unanswerable fields: {unanswerable} — falling back to Skyvern")
                     state["missing_fields"] = unanswerable
                     state["result"] = {"success": False, "reason": "unanswerable_fields"}
@@ -1814,7 +1806,6 @@ async def apply_path1(state: ApplyState) -> ApplyState:
                 else:
                     raise ValueError(f"Greenhouse {res.status_code}: {res.text}")
 
-            # ── Lever ─────────────────────────────────────────────────────────
             elif platform == "lever":
                 job_id = _lever_id(job["job_url"])
                 if not job_id:
@@ -1823,16 +1814,16 @@ async def apply_path1(state: ApplyState) -> ApplyState:
                 res = await client.post(
                     f"https://api.lever.co/v0/postings/{job_id}/apply",
                     json={
-                        "name":     profile.get("full_name"),
-                        "email":    profile.get("email"),
-                        "phone":    profile.get("phone"),
+                        "name": profile.get("full_name"),
+                        "email": profile.get("email"),
+                        "phone": profile.get("phone"),
                         "location": profile.get("location"),
                         "urls": {
-                            "linkedin":  profile.get("linkedin") or "",
-                            "github":    profile.get("github") or "",
+                            "linkedin": profile.get("linkedin") or "",
+                            "github": profile.get("github") or "",
                             "portfolio": profile.get("portfolio") or "",
                         },
-                        "resume":   resume_url,
+                        "resume": resume_url,
                         "comments": job.get("cover_letter_notes") or "",
                     },
                 )
@@ -1842,7 +1833,6 @@ async def apply_path1(state: ApplyState) -> ApplyState:
                 else:
                     raise ValueError(f"Lever {res.status_code}: {res.text}")
 
-            # ── Ashby ─────────────────────────────────────────────────────────
             elif platform == "ashby":
                 job_id = _ashby_id(job["job_url"])
                 if not job_id:
@@ -1853,10 +1843,10 @@ async def apply_path1(state: ApplyState) -> ApplyState:
                     json={
                         "jobPostingId": job_id,
                         "applicationForm": {
-                            "_systemfield_name":        profile.get("full_name"),
-                            "_systemfield_email":       profile.get("email"),
-                            "_systemfield_phone":       profile.get("phone"),
-                            "_systemfield_resume_url":  resume_url,
+                            "_systemfield_name": profile.get("full_name"),
+                            "_systemfield_email": profile.get("email"),
+                            "_systemfield_phone": profile.get("phone"),
+                            "_systemfield_resume_url": resume_url,
                             "_systemfield_linkedin_url": profile.get("linkedin") or "",
                             "_systemfield_website_url": profile.get("portfolio") or "",
                         },
@@ -1874,25 +1864,20 @@ async def apply_path1(state: ApplyState) -> ApplyState:
 
     return state
 
-# ── Path 1 result router ──────────────────────────────────────────────────────
 def path1_router(state: ApplyState) -> str:
     result = state.get("result") or {}
     if result.get("success"):
         return "update_status"
-    # Any failure → Skyvern cloud fallback
     return "skyvern_fallback"
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# NODE 4 — Skyvern cloud fallback (same logic as your existing apply/index.ts)
-# ═══════════════════════════════════════════════════════════════════════════════
 async def skyvern_fallback(state: ApplyState) -> ApplyState:
-    job        = state["job"]
-    profile    = state["profile"]
+    job = state["job"]
+    profile = state["profile"]
     resume_url = state.get("resume_pdf_url") or ""
 
     skyvern_api_key = os.getenv("SKYVERN_API_KEY")
-    supabase_url    = os.getenv("SUPABASE_URL")
-    scout_secret    = os.getenv("SCOUT_SECRET")
+    supabase_url = os.getenv("SUPABASE_URL")
+    scout_secret = os.getenv("SCOUT_SECRET")
 
     if not skyvern_api_key:
         state["result"] = {"success": False, "error": "SKYVERN_API_KEY not configured", "code": "CONFIG_ERROR"}
@@ -1961,12 +1946,11 @@ INSTRUCTIONS:
             if not task_id:
                 raise ValueError(f"Skyvern error: {data}")
 
-            # Save task_id to jobs table so webhook can find the job
             await asyncio.to_thread(
-                lambda: supabase.from_("jobs").update({
-                    "skyvern_task_id":  task_id,
-                    "skyvern_status":   "running",
-                }).eq("id", state["job_id"]).execute()
+                lambda: supabase.from_("user_jobs").update({
+                    "skyvern_task_id": task_id,
+                    "skyvern_status": "running",
+                }).eq("job_id", state["job_id"]).eq("user_id", state["user_id"]).execute()
             )
 
             state["used_fallback"] = True
@@ -1986,9 +1970,6 @@ INSTRUCTIONS:
 
     return state
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# NODE 5 — Update job status in Supabase
-# ═══════════════════════════════════════════════════════════════════════════════
 async def apply_update_status(state: ApplyState) -> ApplyState:
     result = state.get("result") or {}
     if not result.get("success"):
@@ -1997,20 +1978,19 @@ async def apply_update_status(state: ApplyState) -> ApplyState:
     try:
         if result.get("path") == 1:
             await asyncio.to_thread(
-                lambda: supabase.from_("jobs").update({
-                    "status":               "applied",
-                    "applied_at":           datetime.datetime.utcnow().isoformat(),
+                lambda: supabase.from_("user_jobs").update({
+                    "status": "applied",
+                    "applied_at": datetime.datetime.utcnow().isoformat(),
                     "application_platform": result.get("platform"),
-                }).eq("id", state["job_id"]).execute()
+                }).eq("job_id", state["job_id"]).eq("user_id", state["user_id"]).execute()
             )
         elif result.get("path") == 2:
-            # Skyvern async — webhook will update to "applied" when done
             await asyncio.to_thread(
-                lambda: supabase.from_("jobs").update({
-                    "status":               "applying",
-                    "applied_at":           datetime.datetime.utcnow().isoformat(),
+                lambda: supabase.from_("user_jobs").update({
+                    "status": "applying",
+                    "applied_at": datetime.datetime.utcnow().isoformat(),
                     "application_platform": "skyvern",
-                }).eq("id", state["job_id"]).execute()
+                }).eq("job_id", state["job_id"]).eq("user_id", state["user_id"]).execute()
             )
         print(f"[apply:update_status] job {state['job_id']} → path={result.get('path')}")
     except Exception as e:
@@ -2018,25 +1998,18 @@ async def apply_update_status(state: ApplyState) -> ApplyState:
 
     return state
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# NODE 6 — Error handler
-# ═══════════════════════════════════════════════════════════════════════════════
 async def apply_error_handler(state: ApplyState) -> ApplyState:
     print(f"[apply:error] {state.get('result')}")
     return state
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Build Apply Graph
-# ═══════════════════════════════════════════════════════════════════════════════
 def build_apply_graph():
     graph = StateGraph(ApplyState)
-
-    graph.add_node("apply_fetch",          apply_fetch)
+    graph.add_node("apply_fetch", apply_fetch)
     graph.add_node("apply_detect_platform", apply_detect_platform)
-    graph.add_node("apply_path1",          apply_path1)
-    graph.add_node("skyvern_fallback",     skyvern_fallback)
-    graph.add_node("apply_update_status",  apply_update_status)
-    graph.add_node("apply_error_handler",  apply_error_handler)
+    graph.add_node("apply_path1", apply_path1)
+    graph.add_node("skyvern_fallback", skyvern_fallback)
+    graph.add_node("apply_update_status", apply_update_status)
+    graph.add_node("apply_error_handler", apply_error_handler)
 
     graph.set_entry_point("apply_fetch")
     graph.add_edge("apply_fetch", "apply_detect_platform")
@@ -2045,23 +2018,22 @@ def build_apply_graph():
         "apply_detect_platform",
         apply_router,
         {
-            "path1":            "apply_path1",
+            "path1": "apply_path1",
             "skyvern_fallback": "skyvern_fallback",
-            "error":            "apply_error_handler",
+            "error": "apply_error_handler",
         }
     )
 
-    # Path 1 result — success goes to update_status, failure goes to skyvern_fallback
     graph.add_conditional_edges(
         "apply_path1",
         path1_router,
         {
-            "update_status":    "apply_update_status",
+            "update_status": "apply_update_status",
             "skyvern_fallback": "skyvern_fallback",
         }
     )
 
-    graph.add_edge("skyvern_fallback",    "apply_update_status")
+    graph.add_edge("skyvern_fallback", "apply_update_status")
     graph.add_edge("apply_update_status", END)
     graph.add_edge("apply_error_handler", END)
 
@@ -2069,25 +2041,22 @@ def build_apply_graph():
 
 apply_graph = build_apply_graph()
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# POST /apply
-# ═══════════════════════════════════════════════════════════════════════════════
 @app.post("/apply")
 async def apply(req: ApplyRequest):
     if not req.job_id or not req.user_id:
         raise HTTPException(status_code=400, detail="job_id and user_id required")
 
     initial_state: ApplyState = {
-        "job_id":         req.job_id,
-        "user_id":        req.user_id,
+        "job_id": req.job_id,
+        "user_id": req.user_id,
         "resume_pdf_url": req.resume_pdf_url,
-        "job":            None,
-        "profile":        None,
-        "platform":       None,
-        "path":           None,
+        "job": None,
+        "profile": None,
+        "platform": None,
+        "path": None,
         "missing_fields": None,
-        "used_fallback":  False,
-        "result":         None,
+        "used_fallback": False,
+        "result": None,
     }
 
     try:
