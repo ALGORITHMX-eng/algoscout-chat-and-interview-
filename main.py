@@ -1734,8 +1734,12 @@ def apply_router(state: ApplyState) -> str:
         state["path"] = 1
         return "path1"
 
-    state["path"] = 2
-    return "skyvern_fallback"
+    # TEMPORARY: block Skyvern until URL detection fix is deployed
+    state["result"] = {
+        "error": f"Platform '{platform}' not yet supported for direct apply. Skyvern is temporarily disabled.",
+        "code": "PLATFORM_NOT_SUPPORTED",
+    }
+    return "error"
 
 def _gh_ids(url: str):
     m = re.search(r'greenhouse\.io/([^/]+)/jobs/(\d+)', url)
@@ -1868,7 +1872,8 @@ def path1_router(state: ApplyState) -> str:
     result = state.get("result") or {}
     if result.get("success"):
         return "update_status"
-    return "skyvern_fallback"
+    # TEMPORARY: don't fall to Skyvern
+    return "error"
 
 async def skyvern_fallback(state: ApplyState) -> ApplyState:
     job = state["job"]
@@ -2015,14 +2020,14 @@ def build_apply_graph():
     graph.add_edge("apply_fetch", "apply_detect_platform")
 
     graph.add_conditional_edges(
-        "apply_detect_platform",
-        apply_router,
-        {
-            "path1": "apply_path1",
-            "skyvern_fallback": "skyvern_fallback",
-            "error": "apply_error_handler",
-        }
-    )
+    "apply_path1",
+    path1_router,
+    {
+        "update_status": "apply_update_status",
+        "skyvern_fallback": "skyvern_fallback",  # unreachable for now
+        "error": "apply_error_handler",
+    }
+)
 
     graph.add_conditional_edges(
         "apply_path1",
