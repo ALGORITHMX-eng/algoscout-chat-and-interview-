@@ -1763,6 +1763,7 @@ async def apply_path1(state: ApplyState) -> ApplyState:
         async with httpx.AsyncClient(timeout=30) as client:
             if platform == "greenhouse":
                 board_token, job_gh_id = _gh_ids(job["job_url"])
+                print(f"[apply:greenhouse] url={job['job_url']} board_token={board_token} job_gh_id={job_gh_id}")
                 if not board_token or not job_gh_id:
                     raise ValueError("Could not extract Greenhouse board token or job ID")
 
