@@ -1770,6 +1770,7 @@ async def apply_path1(state: ApplyState) -> ApplyState:
                     f"https://boards-api.greenhouse.io/v1/boards/{board_token}/jobs/{job_gh_id}?questions=true"
                 )
                 questions = meta.json().get("questions", [])
+                print(f"[apply:greenhouse] questions: {json.dumps(questions, indent=2)}")
 
                 payload = {
                     "first_name": (profile.get("full_name") or "").split()[0],
