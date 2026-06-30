@@ -6,4 +6,4 @@ langchain-groq==0.2.1
 supabase==2.9.0
 python-dotenv==1.0.1
 pydantic==2.10.3
-httpx==0.27.2
+httpx==0.27.2modal==1.5.1
