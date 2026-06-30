@@ -20,13 +20,13 @@ from supabase import create_client, Client
 
 load_dotenv()
 
-# ── Clients ───────────────────────────────────────────────────────────────────
+# â”€â”€ Clients â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 supabase: Client = create_client(
     os.getenv("SUPABASE_URL"),
     os.getenv("SUPABASE_SERVICE_ROLE_KEY"),
 )
 
-# ── LLM instances ─────────────────────────────────────────────────────────────
+# â”€â”€ LLM instances â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 llm_chat = ChatGroq(
     api_key=os.getenv("GROQ_API_KEY"),
     model="llama-3.3-70b-versatile",
@@ -61,7 +61,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── State ─────────────────────────────────────────────────────────────────────
+# â”€â”€ State â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 class AgentState(TypedDict):
     user_id: str
     session_id: str
@@ -91,35 +91,35 @@ class ChatRequest(BaseModel):
     session_id: str
     messages: List[dict]
 
-# ── App Navigation ────────────────────────────────────────────────────────────
+# â”€â”€ App Navigation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 APP_NAVIGATION = """
 ALGOSCOUT APP NAVIGATION (use this to direct users):
-- Dashboard → view and manage all job leads, approve/reject jobs
-- Chat (current) → career coaching, resume advice, job strategy
-- Interview tab → practice voice or text interviews for specific jobs
-- Profile/Settings → update resume, skills, work preferences, target roles
-- Add Job button → manually add a job by URL or company name
-- Job detail page → view tailored resume and cover letter for a specific job
+- Dashboard â†’ view and manage all job leads, approve/reject jobs
+- Chat (current) â†’ career coaching, resume advice, job strategy
+- Interview tab â†’ practice voice or text interviews for specific jobs
+- Profile/Settings â†’ update resume, skills, work preferences, target roles
+- Add Job button â†’ manually add a job by URL or company name
+- Job detail page â†’ view tailored resume and cover letter for a specific job
 """
 
-# ── Identity System Prompt ────────────────────────────────────────────────────
-IDENTITY_PROMPT = """You are ALGO — AlgoScout's AI career strategist, built into the app.
+# â”€â”€ Identity System Prompt â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+IDENTITY_PROMPT = """You are ALGO â€” AlgoScout's AI career strategist, built into the app.
 You're the sharp friend who knows hiring inside out and knows AlgoScout perfectly.
 
 {app_navigation}
 
 PERSONALITY:
-- Casual greeting → greet back warmly with light emoji, ask what's on their mind.
-- Direct question → answer it directly. Like a sharp friend, not a corporate bot.
-- Venting or frustrated → acknowledge briefly in natural tone (with emoji if it fits), then move straight to useful diagnosis using their real data. Never repeat the same phrase.
-- App navigation questions → tell them exactly where to go.
+- Casual greeting â†’ greet back warmly with light emoji, ask what's on their mind.
+- Direct question â†’ answer it directly. Like a sharp friend, not a corporate bot.
+- Venting or frustrated â†’ acknowledge briefly in natural tone (with emoji if it fits), then move straight to useful diagnosis using their real data. Never repeat the same phrase.
+- App navigation questions â†’ tell them exactly where to go.
 
 FORMATTING:
-- Use **emojis naturally** when it fits (😂, 💪, 😭, 🔥, ✅, 🚀). Max 2-3 per response.
+- Use **emojis naturally** when it fits (ðŸ˜‚, ðŸ’ª, ðŸ˜­, ðŸ”¥, âœ…, ðŸš€). Max 2-3 per response.
 - Match the complexity of the question. Short question = short answer. Big plan request = full structured breakdown.
 - Use headers and bullets only when content has 3+ distinct sections...
 - For single-topic answers, write flowing prose. No forced structure.
-- Emotional replies → plain text only, no formatting whatsoever.
+- Emotional replies â†’ plain text only, no formatting whatsoever.
 - Bold key terms, scores, company names, and action items when it helps readability.
 - Never open with the user's name. Never close with a question.
 
@@ -131,12 +131,12 @@ TONE:
 - If they write in pidgin or informal English, match that energy naturally. Don't force it.
 
 NIGERIAN PIDGIN / INFORMAL ENGLISH AWARENESS:
-- Words like "jharre", "nah", "oya", "sha", "abeg", "wetin" are emotional fillers or emphasis — NEVER treat them as names or commands.
+- Words like "jharre", "nah", "oya", "sha", "abeg", "wetin" are emotional fillers or emphasis â€” NEVER treat them as names or commands.
 - Read emotional tone from context, not literal word parsing.
 
 GROUNDING (NON-NEGOTIABLE):
 - CANDIDATE section below is the only source of truth. Never invent skills, tools, or experience not listed.
-- If something isn't in their profile, say: "I don't have that in your profile — update it in Settings."
+- If something isn't in their profile, say: "I don't have that in your profile â€” update it in Settings."
 - Never recommend on-site US/EU roles to a remote-preference Nigerian candidate unless they explicitly ask.
 
 CAREER RULES:
@@ -145,14 +145,14 @@ CAREER RULES:
 - Write like a sharp person talking, not a consultant delivering a report.
 
 OFF-TOPIC:
-- Coding help unrelated to career → "That's outside what I do — try Claude.ai or ChatGPT. Anything career-wise?"
-- Everything else: career, app, strategy, conversation — fair game.
+- Coding help unrelated to career â†’ "That's outside what I do â€” try Claude.ai or ChatGPT. Anything career-wise?"
+- Everything else: career, app, strategy, conversation â€” fair game.
 
 SUPPORT EMAIL: algorithmengineer4@gmail.com
 Share only if: user asks for contact, reports a bug, or is clearly about to abandon the product.
 """
 
-# ── Updatable profile fields ──────────────────────────────────────────────────
+# â”€â”€ Updatable profile fields â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 UPDATABLE_FIELDS = {
     "skills":             {"label": "Skills",              "supabase_field": "skills",             "type": "array"},
     "preferred_titles":   {"label": "Target Roles",        "supabase_field": "preferred_titles",    "type": "array"},
@@ -165,7 +165,7 @@ UPDATABLE_FIELDS = {
     "portfolio":          {"label": "Portfolio URL",       "supabase_field": "portfolio",           "type": "string"},
 }
 
-# ── Usage Logger ──────────────────────────────────────────────────────────────
+# â”€â”€ Usage Logger â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async def log_api_usage(feature: str, model: str, input_tokens: int, output_tokens: int, user_id: str = "system"):
     try:
         await asyncio.to_thread(
@@ -182,12 +182,12 @@ async def log_api_usage(feature: str, model: str, input_tokens: int, output_toke
     except Exception as e:
         print(f"[usage_logger] failed: {e}")
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# NODE 1 — Retrieve Profile + Resume
-# FIX: Session-level cache — only fetch once per session, reuse on every
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# NODE 1 â€” Retrieve Profile + Resume
+# FIX: Session-level cache â€” only fetch once per session, reuse on every
 #      subsequent message in that session unless cache_dirty is set (which
 #      happens automatically after a profile update).
-# ═══════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 async def retrieve_profile(state: AgentState) -> AgentState:
     user_id = state["user_id"]
     session_id = state["session_id"]
@@ -200,7 +200,7 @@ async def retrieve_profile(state: AgentState) -> AgentState:
         state["resume"] = None
         state["_cache_hit"] = False
         state["_is_greeting"] = True
-        print(f"[node:retrieve_profile] greeting detected — skipped DB fetch")
+        print(f"[node:retrieve_profile] greeting detected â€” skipped DB fetch")
         return state
 
     def fetch_cache():
@@ -218,7 +218,7 @@ async def retrieve_profile(state: AgentState) -> AgentState:
         state["profile"] = data.get("profile") or {}
         state["resume"] = data.get("resume")
         state["_cache_hit"] = True
-        print(f"[node:retrieve_profile] cache hit — skipped Supabase fetch")
+        print(f"[node:retrieve_profile] cache hit â€” skipped Supabase fetch")
         return state
 
     state["_cache_hit"] = False
@@ -243,15 +243,15 @@ async def retrieve_profile(state: AgentState) -> AgentState:
 
     state["profile"] = (profile_res.data if profile_res else None) or {}
     state["resume"] = (resume_res.data[0] if resume_res and resume_res.data else None)
-    print(f"[node:retrieve_profile] fresh fetch — {state['profile'].get('full_name', 'unknown')}")
+    print(f"[node:retrieve_profile] fresh fetch â€” {state['profile'].get('full_name', 'unknown')}")
     return state
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# NODE 2 — Analyze History
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# NODE 2 â€” Analyze History
 # FIX: Reuses cached applied/pending/interview data when retrieve_profile hit
 #      the session cache. Only re-fetches from Supabase on a cache miss or
 #      after the cache has been marked dirty (e.g. after a profile update).
-# ═══════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 async def analyze_history(state: AgentState) -> AgentState:
     user_id = state["user_id"]
     session_id = state["session_id"]
@@ -270,7 +270,7 @@ async def analyze_history(state: AgentState) -> AgentState:
 
     # Greeting turns deliberately skip the real profile fetch in
     # retrieve_profile, so we must NOT run the heavy fetch here or write a
-    # cache entry — doing so would permanently cache an empty profile for
+    # cache entry â€” doing so would permanently cache an empty profile for
     # this session and poison every later message. Just return light defaults.
     if state.get("_is_greeting"):
         state["applied_jobs"] = []
@@ -281,7 +281,7 @@ async def analyze_history(state: AgentState) -> AgentState:
         state["rejected_jobs"] = []
         state["recent_interviews"] = []
         state["profile_update"] = None
-        print(f"[node:analyze_history] greeting turn — skipped fetch + cache write")
+        print(f"[node:analyze_history] greeting turn â€” skipped fetch + cache write")
         return state
 
     if state.get("_cache_hit"):
@@ -304,7 +304,7 @@ async def analyze_history(state: AgentState) -> AgentState:
             state["rejected_jobs"] = []
             state["session_history"] = []
             state["profile_update"] = None
-            print(f"[node:analyze_history] cache hit — applied={len(state['applied_jobs'])}")
+            print(f"[node:analyze_history] cache hit â€” applied={len(state['applied_jobs'])}")
             return state
 
     def fetch_applied():
@@ -330,7 +330,7 @@ async def analyze_history(state: AgentState) -> AgentState:
                 .eq("user_id", user_id).eq("session_id", session_id).single().execute()
         except: return None
 
-    # Fetch interview summaries — only score + feedback fields, not full messages
+    # Fetch interview summaries â€” only score + feedback fields, not full messages
     def fetch_interviews():
         try:
             return supabase.from_("interview_sessions").select(
@@ -358,7 +358,7 @@ async def analyze_history(state: AgentState) -> AgentState:
     state["rejected_jobs"] = []
     state["profile_update"] = None
 
-    # Store only compact interview summary — never raw transcript
+    # Store only compact interview summary â€” never raw transcript
     raw_interviews = (interviews_res.data if interviews_res else []) or []
     state["recent_interviews"] = [
         {
@@ -368,7 +368,7 @@ async def analyze_history(state: AgentState) -> AgentState:
             "hire_likelihood": (s.get("feedback") or {}).get("hire_likelihood"),
             "gaps": (s.get("feedback") or {}).get("critical_gaps", [])[:3],
             "weak_areas": [
-                f"{sec['category']}: {sec['score']}/100 — {sec['improvement']}"
+                f"{sec['category']}: {sec['score']}/100 â€” {sec['improvement']}"
                 for sec in ((s.get("feedback") or {}).get("sections") or [])
                 if sec.get("score", 100) < 60
             ],
@@ -417,14 +417,14 @@ async def analyze_history(state: AgentState) -> AgentState:
 
     asyncio.create_task(asyncio.to_thread(upsert_cache))
 
-    print(f"[node:analyze_history] fresh fetch — applied={len(state['applied_jobs'])} interviews={len(state['recent_interviews'])}")
+    print(f"[node:analyze_history] fresh fetch â€” applied={len(state['applied_jobs'])} interviews={len(state['recent_interviews'])}")
     return state
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# NODE 3 — Smart Classifier
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# NODE 3 â€” Smart Classifier
 # FIX: Better Nigerian Pidgin awareness + emotional detection
-#      "greeting" only fires on the very first message — not mid-conversation
-# ═══════════════════════════════════════════════════════════════════════════════
+#      "greeting" only fires on the very first message â€” not mid-conversation
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 async def smart_classifier(state: AgentState) -> AgentState:
     msg = state["user_message"]
     msg_lower = msg.lower().strip()
@@ -436,7 +436,7 @@ async def smart_classifier(state: AgentState) -> AgentState:
     # SAFETY NET: catch obvious profile-update phrasing with a cheap regex
     # before even calling the LLM. This guarantees "add X to my skills" type
     # messages always route correctly regardless of what the 8b classifier
-    # decides — closes the exact bug where "add Docker to my skills" got
+    # decides â€” closes the exact bug where "add Docker to my skills" got
     # misrouted to "career" and triggered a false "I don't have that" reply.
     profile_update_patterns = [
         r"\badd\b.{0,40}\bto my (skills|profile|target roles|resume)\b",
@@ -445,7 +445,7 @@ async def smart_classifier(state: AgentState) -> AgentState:
         r"\bchange my (location|work preference|years? of experience|linkedin|github|portfolio|bio|summary)\b",
         r"\bset my (location|work preference|years? of experience)\b",
         # Looser catches for implied "add this to my skills" phrasing that
-        # doesn't literally say "to my skills" — e.g. "help me add Docker",
+        # doesn't literally say "to my skills" â€” e.g. "help me add Docker",
         # "oya help me add browser automation", "help me add am nah" as a
         # follow-up to a skill being discussed.
         r"\bhelp me add\b",
@@ -461,27 +461,27 @@ async def smart_classifier(state: AgentState) -> AgentState:
 
 CRITICAL CONTEXT RULES:
 - The user may write in Nigerian Pidgin or informal English
-- Words like "jharre", "nah", "oya", "sha", "abeg", "wetin", "e don do" are emotional fillers or emphasis — NEVER names or commands
+- Words like "jharre", "nah", "oya", "sha", "abeg", "wetin", "e don do" are emotional fillers or emphasis â€” NEVER names or commands
 - Swearing + job/rejection context = "emotional", not "greeting"
 - A follow-up message mid-conversation is NEVER "greeting" even if it's short
 - This is message #{len(state['messages'])} in the conversation. First assistant message exists: {not is_first_message}
 
 CATEGORIES:
-- "greeting" → ONLY if this is the very first message AND it is pure casual small talk with zero career intent (hi, hey, hello, what's up). If there has already been conversation, NEVER use this.
-- "emotional" → user is frustrated, venting, swearing, expressing dejection about job search or rejection — includes pidgin expressions like "fuck them jharre", "e don do me like that", "this thing dey pain me"
-- "off_topic" → coding help unrelated to career, recipes, weather, sports scores, news
-- "profile_update" → wants to add, update, change, or remove something from their profile: skills, target roles, years of experience, work preference, location, bio/summary, LinkedIn, GitHub, portfolio
-- "career" → everything else: job questions, resume help, interview prep, salary, skills, app navigation, AlgoScout features, career strategy, rejection analysis
+- "greeting" â†’ ONLY if this is the very first message AND it is pure casual small talk with zero career intent (hi, hey, hello, what's up). If there has already been conversation, NEVER use this.
+- "emotional" â†’ user is frustrated, venting, swearing, expressing dejection about job search or rejection â€” includes pidgin expressions like "fuck them jharre", "e don do me like that", "this thing dey pain me"
+- "off_topic" â†’ coding help unrelated to career, recipes, weather, sports scores, news
+- "profile_update" â†’ wants to add, update, change, or remove something from their profile: skills, target roles, years of experience, work preference, location, bio/summary, LinkedIn, GitHub, portfolio
+- "career" â†’ everything else: job questions, resume help, interview prep, salary, skills, app navigation, AlgoScout features, career strategy, rejection analysis
 
 EXAMPLES:
-Message: "add Docker to my skills" → profile_update
-Message: "remove React from my skills" → profile_update
-Message: "update my location to Lagos" → profile_update
-Message: "I want to target Backend Engineer roles too" → profile_update
-Message: "wetin dey happen with my dashboard" → career
-Message: "fuck this job market jharre" → emotional
-Message: "what's the weather like today" → off_topic
-Message: "hey" (first message) → greeting
+Message: "add Docker to my skills" â†’ profile_update
+Message: "remove React from my skills" â†’ profile_update
+Message: "update my location to Lagos" â†’ profile_update
+Message: "I want to target Backend Engineer roles too" â†’ profile_update
+Message: "wetin dey happen with my dashboard" â†’ career
+Message: "fuck this job market jharre" â†’ emotional
+Message: "what's the weather like today" â†’ off_topic
+Message: "hey" (first message) â†’ greeting
 
 Message: "{msg}"
 
@@ -506,24 +506,24 @@ Reply with ONLY one word: greeting, emotional, off_topic, profile_update, or car
     print(f"[node:smart_classifier] route={state['detected_route']} msg='{msg[:50]}'")
     return state
 
-# ── Router ────────────────────────────────────────────────────────────────────
+# â”€â”€ Router â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 def router(state: AgentState) -> str:
     return state.get("detected_route", "career")
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# NODE 4 — Greeting Responder
-# FIX: Upgraded to 70b (llm_chat) — was sounding robotic on 8b.
-# ═══════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# NODE 4 â€” Greeting Responder
+# FIX: Upgraded to 70b (llm_chat) â€” was sounding robotic on 8b.
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 async def greeting_responder(state: AgentState) -> AgentState:
     profile = state["profile"] or {}
     name = profile.get("full_name", "").split()[0] if profile.get("full_name") else ""
 
-    prompt = f"""You are ALGO — a warm, smart career assistant inside the AlgoScout app.
+    prompt = f"""You are ALGO â€” a warm, smart career assistant inside the AlgoScout app.
 {"The user's name is " + name + "." if name else ""}
 The user just sent a casual greeting or small talk message.
 RULES:
 - Greet them back warmly and naturally. Use their name if you have it.
-- Ask how they're doing or what's on their mind — ONE short question.
+- Ask how they're doing or what's on their mind â€” ONE short question.
 - Do NOT dump career data or job listings at them unprompted.
 - Do NOT say "I'm here to help with your career" or any corporate opening.
 - Max 2 sentences. Sound like a real person."""
@@ -537,26 +537,26 @@ RULES:
     asyncio.create_task(log_api_usage("chat_greeting", "llama-3.3-70b-versatile", 200, len(full_response) // 4, state["user_id"]))
     return state
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# NODE 5 — Off Topic Rejector (no LLM call)
-# ═══════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# NODE 5 â€” Off Topic Rejector (no LLM call)
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 async def off_topic_rejector(state: AgentState) -> AgentState:
     state["final_response"] = (
-        "That's outside what I do — try Claude.ai or ChatGPT for that. "
+        "That's outside what I do â€” try Claude.ai or ChatGPT for that. "
         "Anything career-wise I can help with?"
     )
     return state
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# NODE 6 — Profile Update Detector
-# ═══════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# NODE 6 â€” Profile Update Detector
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 async def profile_update_detector(state: AgentState) -> AgentState:
     profile = state["profile"] or {}
     msg = state["user_message"]
 
     # Build a short recent-history block so the model can resolve pidgin
     # pronouns like "am"/"it"/"that" back to whatever skill/field was
-    # actually being discussed a turn or two earlier — e.g. "help me add
+    # actually being discussed a turn or two earlier â€” e.g. "help me add
     # am nah" only makes sense with "browser automation" from a prior turn.
     recent_turns = state["messages"][-6:] if state.get("messages") else []
     history_lines = "\n".join([
@@ -585,7 +585,7 @@ USER MESSAGE: "{msg}"
 Return JSON:
 {{
   "field": "<one of: skills, preferred_titles, years_experience, work_preference, location, experience_summary, linkedin, github, portfolio>",
-  "proposed": <new value — array for skills/preferred_titles, number for years_experience, string for others>,
+  "proposed": <new value â€” array for skills/preferred_titles, number for years_experience, string for others>,
   "action_type": "<add | remove | replace>",
   "understood": "<one sentence confirming what you understood>"
 }}
@@ -636,15 +636,15 @@ Return ONLY the JSON. No explanation."""
 
     return state
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# NODE 7 — Profile Update Responder
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# NODE 7 â€” Profile Update Responder
 # FIX: Marks this session's cache dirty so the NEXT message re-fetches a
 #      fresh profile instead of serving the stale cached one.
-# ═══════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 async def profile_update_responder(state: AgentState) -> AgentState:
     update = state.get("profile_update")
     if not update:
-        state["final_response"] = "I couldn't figure out what you wanted to update. Try being more specific — for example: 'Add React to my skills' or 'Update my location to Lagos'."
+        state["final_response"] = "I couldn't figure out what you wanted to update. Try being more specific â€” for example: 'Add React to my skills' or 'Update my location to Lagos'."
         return state
 
     profile = state["profile"] or {}
@@ -652,7 +652,7 @@ async def profile_update_responder(state: AgentState) -> AgentState:
 
     prompt = f"""You are ALGO, a career assistant.
 The user wants to update their profile. Confirm what you understood in ONE natural sentence, then say you've prepared the change below for their review.
-Say "I've prepared the change for you to review" — NOT "I'll update".
+Say "I've prepared the change for you to review" â€” NOT "I'll update".
 {"User's name is " + name + "." if name else ""}
 What they want: {update['understood']}
 Field: {update['field_label']}
@@ -665,7 +665,7 @@ Max 2 sentences. Sound like a real person."""
         ])
         state["final_response"] = result.content.strip()
     except:
-        state["final_response"] = f"Got it — I've prepared the change to your {update['field_label']} for you to review below."
+        state["final_response"] = f"Got it â€” I've prepared the change to your {update['field_label']} for you to review below."
 
     def mark_dirty():
         try:
@@ -678,9 +678,9 @@ Max 2 sentences. Sound like a real person."""
 
     return state
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# NODE 8 — Career Reasoning (no LLM)
-# ═══════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# NODE 8 â€” Career Reasoning (no LLM)
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 async def career_reasoning(state: AgentState) -> AgentState:
     profile = state["profile"]
     years_exp = profile.get("years_experience", 0)
@@ -715,9 +715,9 @@ async def career_reasoning(state: AgentState) -> AgentState:
     print(f"[node:career_reasoning] tier={tier} intent={intent}")
     return state
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# NODE 9 — Resume Grounder
-# ═══════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# NODE 9 â€” Resume Grounder
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 async def resume_grounder(state: AgentState) -> AgentState:
     resume_relevant_intents = ["resume_help", "cover_letter", "positioning_strategy", "general_career"]
     if state["detected_intent"] not in resume_relevant_intents or not state["resume"]:
@@ -729,7 +729,7 @@ async def resume_grounder(state: AgentState) -> AgentState:
         summary = resume_json.get("summary", "")
         experience = resume_json.get("experience", [])
         exp_text = "\n".join([
-            f"• {e.get('role')} at {e.get('company')}: {e.get('summary', '')}"
+            f"â€¢ {e.get('role')} at {e.get('company')}: {e.get('summary', '')}"
             for e in experience[:3]
         ])
         state["resume_context"] = f"""RESUME DATA:
@@ -741,9 +741,9 @@ Experience:
         state["resume_context"] = None
     return state
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# NODE 10 — Apply Tooling
-# ═══════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# NODE 10 â€” Apply Tooling
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 async def apply_tooling(state: AgentState) -> AgentState:
     profile = state["profile"]
     intent = state["detected_intent"]
@@ -758,24 +758,24 @@ async def apply_tooling(state: AgentState) -> AgentState:
         skills_gap_text = f"\nRECURRING SKILLS GAP: {', '.join(state['skills_gap'])}"
 
     applied_summary = "\n".join([
-        f"• {j['role']} at {j['company']} — {j['score']}/10"
+        f"â€¢ {j['role']} at {j['company']} â€” {j['score']}/10"
         for j in state["applied_jobs"]
     ]) or "None yet"
 
     pending_summary = "\n".join([
-        f"• {j['role']} at {j['company']} — {j['score']}/10"
+        f"â€¢ {j['role']} at {j['company']} â€” {j['score']}/10"
         for j in state["pending_jobs"]
     ]) or "None"
 
     intent_instructions = {
-        "resume_help": "Rewrite their bullets now. Don't ask — just do it. Show BEFORE and AFTER. Name exactly what was weak.",
+        "resume_help": "Rewrite their bullets now. Don't ask â€” just do it. Show BEFORE and AFTER. Name exactly what was weak.",
         "cover_letter": "Write the full cover letter now. Use their most recent applied job as context.",
         "interview_prep": "Give 3 hard, role-specific questions at their experience level. Answer one yourself as a model.",
-        "learning_path": "Pick ONE skill from their gap that matches what companies in their applied jobs actually want. Tell them exactly what to build with it — a specific mini project. One skill, one project, concrete outcome.",
+        "learning_path": "Pick ONE skill from their gap that matches what companies in their applied jobs actually want. Tell them exactly what to build with it â€” a specific mini project. One skill, one project, concrete outcome.",
         "salary_negotiation": "Give exact salary ranges for their role and level. Tell them word-for-word what to say.",
         "rejection_support": "One sentence acknowledging it. Then diagnose the real reason using their data. Then 3 specific fixes.",
         "positioning_strategy": "Give a direct verdict. No hedging. Reference session history if one exists.",
-        "app_navigation": "Tell them exactly where to go in the app. Be specific — Dashboard, Profile tab, Interview tab, Settings, Add Job button.",
+        "app_navigation": "Tell them exactly where to go in the app. Be specific â€” Dashboard, Profile tab, Interview tab, Settings, Add Job button.",
         "general_career": "Answer using their actual data. Reference real skills, companies, scores. No generic advice.",
     }.get(intent, "")
 
@@ -787,7 +787,7 @@ Location: {profile.get('location', 'Not specified')}
 Work Preference: {profile.get('work_preference', 'remote')}
 Background: {profile.get('experience_summary', 'Not provided')}
 
-CONFIRMED SKILLS (ONLY these — never add others):
+CONFIRMED SKILLS (ONLY these â€” never add others):
 {skills}
 
 TARGET ROLES:
@@ -809,10 +809,10 @@ INTENT: {intent}
 INSTRUCTION: {intent_instructions}
 """.strip()
 
-    # Inject interview summary — compact format, no raw transcript
+    # Inject interview summary â€” compact format, no raw transcript
     if state.get("recent_interviews"):
         interview_lines = "\n".join([
-            f"• {i['date']} — Score: {i.get('overall_score', 'N/A')}/100 | "
+            f"â€¢ {i['date']} â€” Score: {i.get('overall_score', 'N/A')}/100 | "
             f"Gaps: {', '.join((i.get('critical_gaps') or [])[:2])} | "
             f"Hire likelihood: {i.get('hire_likelihood', 'N/A')} | "
             f"Verdict: {i.get('overall_verdict', '')}"
@@ -829,9 +829,9 @@ INSTRUCTION: {intent_instructions}
     print(f"[node:apply_tooling] intent={intent}")
     return state
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# NODE 11 — Consistency Checker
-# ═══════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# NODE 11 â€” Consistency Checker
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 async def consistency_checker(state: AgentState) -> AgentState:
     conclusions = state.get("previous_conclusions", {})
     intent = state["detected_intent"]
@@ -854,9 +854,9 @@ async def consistency_checker(state: AgentState) -> AgentState:
         print(f"[node:consistency_checker] save error: {e}")
     return state
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# NODE 12 — Responder (70b)
-# ═══════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# NODE 12 â€” Responder (70b)
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 async def responder(state: AgentState) -> AgentState:
     system = IDENTITY_PROMPT.format(app_navigation=APP_NAVIGATION)
     lc_messages = [SystemMessage(content=f"{system}\n\n{state['career_context']}")]
@@ -881,13 +881,13 @@ async def responder(state: AgentState) -> AgentState:
     print(f"[node:responder] len={len(full_response)}")
     return state
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# NODE 13 — Emotional Responder
-# FIX 1: Upgraded to 70b (llm_chat) — was sounding robotic on 8b.
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# NODE 13 â€” Emotional Responder
+# FIX 1: Upgraded to 70b (llm_chat) â€” was sounding robotic on 8b.
 # FIX 2: Now injects REAL profile/job data into the prompt so the model can
 #        no longer hallucinate GPA, years of experience, or scores that were
 #        never in the candidate's profile. No probing questions. Pidgin-aware.
-# ═══════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 async def emotional_responder(state: AgentState) -> AgentState:
     profile = state["profile"] or {}
     name = profile.get("full_name", "").split()[0] if profile.get("full_name") else ""
@@ -900,12 +900,12 @@ async def emotional_responder(state: AgentState) -> AgentState:
     ) or "none yet"
 
     real_data_block = f"""
-REAL CANDIDATE DATA (use ONLY this — NEVER invent GPA, years of experience, or any score not shown here):
+REAL CANDIDATE DATA (use ONLY this â€” NEVER invent GPA, years of experience, or any score not shown here):
 Skills: {skills}
 Applied jobs: {applied_summary}
 """
 
-    # Detect "done for today / need a break" signals — don't push, just acknowledge
+    # Detect "done for today / need a break" signals â€” don't push, just acknowledge
     done_signals = [
         "i am done", "i'm done", "done for today", "done for now",
         "i need a break", "taking a break", "i'm tired", "i am tired",
@@ -916,8 +916,8 @@ Applied jobs: {applied_summary}
     is_done_signal = any(sig in msg for sig in done_signals)
 
     if is_done_signal:
-        # Pure acknowledgment — no push, no task, no question
-        prompt = f"""You are ALGO — a career assistant who actually listens.
+        # Pure acknowledgment â€” no push, no task, no question
+        prompt = f"""You are ALGO â€” a career assistant who actually listens.
 {"User's name is " + name + "." if name else ""}
 The user is saying they're done for today or need a break from job hunting.
 
@@ -925,23 +925,23 @@ RULES:
 - Acknowledge it simply. That's it.
 - Do NOT suggest any next steps, tasks, or actions.
 - Do NOT ask any questions.
-- Do NOT say "I'm here when you're ready" or any variation of that — it's pushy.
+- Do NOT say "I'm here when you're ready" or any variation of that â€” it's pushy.
 - Just let them rest. One short human sentence. Max 10 words.
 - Examples of good responses: "Take the rest. You've put in the work." / "Rest up. Job hunting can wait." / "Yeah, step away. It'll still be here."
 - Never sound corporate or like a support bot."""
 
     else:
         # Regular emotional venting
-        prompt = f"""You are ALGO — a career assistant who actually cares.
+        prompt = f"""You are ALGO â€” a career assistant who actually cares.
 {"User's name is " + name + "." if name else ""}
 {real_data_block}
 The user is venting or frustrated about job search (possibly in pidgin).
 
 RULES:
 - Acknowledge in one short natural sentence. Sound like a sharp Naija guy.
-- Use light emoji where it fits (😂, 😭, 💪, 🔥).
+- Use light emoji where it fits (ðŸ˜‚, ðŸ˜­, ðŸ’ª, ðŸ”¥).
 - Be direct. Never say "that one stings" or "that's rough".
-- Then one sentence max about next move using ONLY the REAL CANDIDATE DATA above — never invent GPA, scores, or experience not listed there.
+- Then one sentence max about next move using ONLY the REAL CANDIDATE DATA above â€” never invent GPA, scores, or experience not listed there.
 - Total max 2 sentences. Match their energy. No questions."""
 
     full_response = ""
@@ -952,9 +952,9 @@ RULES:
     state["final_response"] = full_response
     asyncio.create_task(log_api_usage("chat_emotional", "llama-3.3-70b-versatile", 150, len(full_response) // 4, state["user_id"]))
     return state
-# ═══════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 # Build the Chat Graph
-# ═══════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 def build_graph():
     graph = StateGraph(AgentState)
 
@@ -1007,9 +1007,9 @@ def build_graph():
 
 algo_graph = build_graph()
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 # Logging
-# ═══════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 async def log_event(type: str, message: str, source: str, metadata: dict = {}):
     try:
         supabase.from_("monitor_logs").insert({
@@ -1021,12 +1021,12 @@ async def log_event(type: str, message: str, source: str, metadata: dict = {}):
     except Exception as e:
         print(f"[monitor] failed to log: {e}")
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 # API Routes
-# ═══════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 @app.get("/")
 async def root():
-    return {"status": "AlgoScout LangGraph backend running — 14 nodes"}
+    return {"status": "AlgoScout LangGraph backend running â€” 14 nodes"}
 
 
 @app.get("/health")
@@ -1165,7 +1165,7 @@ async def chat(req: ChatRequest):
     )
 
 
-# ── Profile Update Endpoint ───────────────────────────────────────────────────
+# â”€â”€ Profile Update Endpoint â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 class ProfileUpdateRequest(BaseModel):
     user_id: str
     field: str
@@ -1194,12 +1194,12 @@ async def update_profile(req: ProfileUpdateRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 # INTERVIEW GRAPH
 # FIX: Interview state now also caches profile/resume per interview session_id
-#      so it isn't re-fetched on every single message exchange — only on the
+#      so it isn't re-fetched on every single message exchange â€” only on the
 #      first message of the interview session, unless flagged dirty.
-# ═══════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 class InterviewState(TypedDict):
     user_id: str
     session_id: str
@@ -1221,7 +1221,7 @@ class InterviewState(TypedDict):
 
 INTERVIEW_IDENTITY = """You are a senior interviewer at {company}. Your name is ALGO.
 You are conducting a {role} interview with {name}.
-You are warm but professional — like a real human interviewer who actually enjoys their job.
+You are warm but professional â€” like a real human interviewer who actually enjoys their job.
 
 RULES:
 - Ask ONE question at a time. Never two.
@@ -1229,12 +1229,12 @@ RULES:
 - After they answer the small talk, say one short sentence then ask: "Can you tell me about yourself and your experience so far?"
 - After they answer that, pick your next question by pulling a specific thread from what they just said.
 - Use their skills gap to decide which threads to pull harder on.
-- If the answer is weak: probe deeper — "Can you give a specific example of that?"
+- If the answer is weak: probe deeper â€” "Can you give a specific example of that?"
 - If the answer is strong: acknowledge briefly then pivot to a harder related topic.
 - Never give hints, coaching, or feedback during the interview.
 - Never break character. You are ALGO, a human interviewer.
 - Never say you are an AI.
-- After {max_questions} questions, close warmly: "Alright {name}, that's everything I needed — we'll be in touch soon. Take care!"
+- After {max_questions} questions, close warmly: "Alright {name}, that's everything I needed â€” we'll be in touch soon. Take care!"
 
 {interview_context}"""
 
@@ -1262,7 +1262,7 @@ async def interview_retrieve_profile(state: InterviewState) -> InterviewState:
         if cached and cached.get("cached_profile") is not None:
             state["profile"] = cached.get("cached_profile") or {}
             state["resume"] = cached.get("cached_resume")
-            print(f"[interview:retrieve_profile] cache hit — skipped Supabase fetch")
+            print(f"[interview:retrieve_profile] cache hit â€” skipped Supabase fetch")
             return state
 
     try:
@@ -1383,7 +1383,7 @@ DESCRIPTION: {(job.get('raw_text') or '')[:1000]}
 CANDIDATE SKILLS: {skills}
 EXPERIENCE: {profile.get('experience_summary', 'Not provided')}
 {gap_instruction}
-SESSION: Question {state['question_count'] + 1} of {max_questions} · Difficulty: {difficulty}
+SESSION: Question {state['question_count'] + 1} of {max_questions} Â· Difficulty: {difficulty}
 INSTRUCTION: {route_instruction}
 """.strip()
     return state
@@ -1430,7 +1430,7 @@ async def interview_responder(state: InterviewState) -> InterviewState:
                 content = (
                     "Greet the candidate by first name only. "
                     "Say your name is ALGO and you're from the company. "
-                    "Ask how their day is going — ONE short casual question, max 8 words. "
+                    "Ask how their day is going â€” ONE short casual question, max 8 words. "
                     "Total response: 2 sentences max. Sound like a real person."
                 )
             lc_messages.append(HumanMessage(content=content))
@@ -1580,9 +1580,9 @@ Return ONLY valid JSON:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 # Usage Stats Endpoint
-# ═══════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 @app.get("/usage/today")
 async def usage_today():
     try:
@@ -1606,492 +1606,131 @@ async def usage_today():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
 
+# ============================================================================
+# AUTO-APPLY via Modal Skyvern worker
+# main.py just validates and fires the request — all browser automation
+# (LangGraph apply_graph / resume_graph) runs remotely on Modal.
+# ============================================================================
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# AUTO-APPLY GRAPH
-# Flow:
-#   fetch_job_and_profile
-#     → detect_platform
-#       → path1_apply (Greenhouse/Lever/Ashby direct API)
-#           success → update_status → END
-#           fails   → skyvern_fallback → update_status → END
-#       → skyvern_fallback (Workday/Taleo/other — straight to Skyvern cloud)
-#           → update_status → END
-# ═══════════════════════════════════════════════════════════════════════════════
+import modal
 
+_modal_apply = modal.Function.from_name("skyvern-worker", "run_apply")
+_modal_resume = modal.Function.from_name("skyvern-worker", "run_resume")
 
-
-import httpx
-import re
-
-class ApplyState(TypedDict):
-    job_id: str
-    user_id: str
-    resume_pdf_url: Optional[str]
-    job: Optional[dict]
-    profile: Optional[dict]
-    platform: Optional[str]
-    path: Optional[int]
-    missing_fields: Optional[List[str]]
-    used_fallback: Optional[bool]
-    result: Optional[dict]
 
 class ApplyRequest(BaseModel):
     job_id: str
     user_id: str
     resume_pdf_url: Optional[str] = None
 
-async def apply_fetch(state: ApplyState) -> ApplyState:
-    def _job():
-        return supabase.from_("jobs_master").select("*").eq("id", state["job_id"]).single().execute()
 
-    def _profile():
-        return supabase.from_("profiles").select("*").eq("user_id", state["user_id"]).single().execute()
+class ResumeRequest(BaseModel):
+    job_id: str
+    user_id: str
+    user_answer: str
 
-    def _user_job():
-        return supabase.from_("user_jobs").select("resume_notes, cover_letter_notes") \
-            .eq("job_id", state["job_id"]).eq("user_id", state["user_id"]).single().execute()
-
-    job_res, profile_res, user_job_res = await asyncio.gather(
-        asyncio.to_thread(_job),
-        asyncio.to_thread(_profile),
-        asyncio.to_thread(_user_job),
-    )
-
-    state["job"] = job_res.data if job_res else None
-    state["profile"] = profile_res.data if profile_res else None
-
-    if state["job"] and user_job_res and user_job_res.data:
-        state["job"]["cover_letter_notes"] = user_job_res.data.get("cover_letter_notes")
-        state["job"]["resume_notes"] = user_job_res.data.get("resume_notes")
-
-    print(f"[apply:fetch] job={state['job_id']} user={state['user_id']}")
-    return state
-
-async def apply_detect_platform(state: ApplyState) -> ApplyState:
-    job = state["job"]
-    if not job:
-        state["platform"] = "unknown"
-        return state
-
-    source = (job.get("source") or "").lower().strip()
-    url = (job.get("job_url") or "").lower()
-
-    if "greenhouse" in source or "greenhouse" in url:
-        state["platform"] = "greenhouse"
-    elif "lever" in source or "lever.co" in url:
-        state["platform"] = "lever"
-    elif "ashby" in source or "ashbyhq" in url:
-        state["platform"] = "ashby"
-    elif "workday" in source or "workday" in url or "myworkdayjobs" in url:
-        state["platform"] = "workday"
-    elif "taleo" in source or "taleo" in url:
-        state["platform"] = "taleo"
-    else:
-        state["platform"] = "other"
-
-    print(f"[apply:detect_platform] platform={state['platform']}")
-    return state
-
-def apply_router(state: ApplyState) -> str:
-    job = state.get("job")
-    profile = state.get("profile")
-
-    if not job:
-        state["result"] = {"error": "Job not found", "code": "JOB_NOT_FOUND"}
-        return "error"
-
-    if not profile:
-        state["result"] = {"error": "Profile not found", "code": "PROFILE_NOT_FOUND"}
-        return "error"
-
-    if not job.get("cover_letter_notes") or not job.get("resume_notes"):
-        state["result"] = {
-            "error": "Please generate your tailored resume and cover letter before applying.",
-            "code": "DOCS_NOT_GENERATED",
-        }
-        return "error"
-
-    missing = []
-    if not profile.get("full_name"): missing.append("full name")
-    if not profile.get("email"): missing.append("email")
-    if not profile.get("phone"): missing.append("phone number")
-    if not profile.get("location"): missing.append("location")
-    if missing:
-        state["result"] = {
-            "error": f"Your profile is missing: {', '.join(missing)}. Please update your profile before applying.",
-            "code": "INCOMPLETE_PROFILE",
-            "missing": missing,
-        }
-        return "error"
-
-    platform = state.get("platform", "other")
-    if platform in ("greenhouse", "lever", "ashby"):
-        state["path"] = 1
-        return "path1"
-
-    # TEMPORARY: block Skyvern until URL detection fix is deployed
-    state["result"] = {
-        "error": f"Platform '{platform}' not yet supported for direct apply. Skyvern is temporarily disabled.",
-        "code": "PLATFORM_NOT_SUPPORTED",
-    }
-    return "error"
-
-def _gh_ids(url: str):
-    m = re.search(r'greenhouse\.io/([^/]+)/jobs/(\d+)', url)
-    return (m.group(1), m.group(2)) if m else (None, None)
-
-def _lever_id(url: str):
-    m = re.search(r'lever\.co/[^/]+/([a-f0-9\-]+)', url, re.I)
-    return m.group(1) if m else None
-
-def _ashby_id(url: str):
-    m = re.search(r'ashbyhq\.com/[^/]+/([a-f0-9\-]+)', url, re.I)
-    return m.group(1) if m else None
-
-async def apply_path1(state: ApplyState) -> ApplyState:
-    job = state["job"]
-    profile = state["profile"]
-    platform = state["platform"]
-    resume_url = state.get("resume_pdf_url") or ""
-
-    try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            if platform == "greenhouse":
-                board_token, job_gh_id = _gh_ids(job["job_url"])
-                print(f"[apply:greenhouse] url={job['job_url']} board_token={board_token} job_gh_id={job_gh_id}")
-                if not board_token or not job_gh_id:
-                    raise ValueError("Could not extract Greenhouse board token or job ID")
-
-                meta = await client.get(
-                    f"https://boards-api.greenhouse.io/v1/boards/{board_token}/jobs/{job_gh_id}?questions=true"
-                )
-                questions = meta.json().get("questions", [])
-                print(f"[apply:greenhouse] questions: {json.dumps(questions, indent=2)}")
-
-                payload = {
-                    "first_name": (profile.get("full_name") or "").split()[0],
-                    "last_name": " ".join((profile.get("full_name") or "").split()[1:]) or ".",
-                    "email": profile.get("email"),
-                    "phone": profile.get("phone"),
-                    "location": profile.get("location"),
-                    "resume": resume_url,
-                    "cover_letter": job.get("cover_letter_notes") or "",
-                    "linkedin_url": profile.get("linkedin") or "",
-                    "website": profile.get("portfolio") or profile.get("github") or "",
-                }
-
-                GREENHOUSE_ANSWERABLE = {
-                    "first_name", "last_name", "email", "phone", "location",
-                    "resume", "cover_letter", "cover_letter_text", "linkedin_url",
-                    "website", "latitude", "longitude", "country_short_name",
-                }
-
-                unanswerable = [
-                    q.get("label")
-                    for q in questions
-                    if q.get("required")
-                    and not any(
-                        f.get("name") in GREENHOUSE_ANSWERABLE
-                        for f in q.get("fields", [])
-                    )
-                ]
-
-                if unanswerable:
-                    print(f"[apply:path1] unanswerable fields: {unanswerable} — falling back to Skyvern")
-                    state["missing_fields"] = unanswerable
-                    state["result"] = {"success": False, "reason": "unanswerable_fields", "missing_fields": unanswerable}
-                    return state
-
-                res = await client.post(
-                    f"https://boards-api.greenhouse.io/v1/boards/{board_token}/jobs/{job_gh_id}/apply",
-                    json=payload,
-                )
-
-                if res.status_code in (200, 201):
-                    state["result"] = {"success": True, "platform": "greenhouse", "path": 1}
-                elif res.status_code == 422:
-                    err_fields = [e.get("message", str(e)) for e in res.json().get("errors", [])]
-                    print(f"[apply:path1] Greenhouse 422 — falling back to Skyvern: {err_fields}")
-                    state["missing_fields"] = err_fields
-                    state["result"] = {"success": False, "reason": "greenhouse_422"}
-                else:
-                    raise ValueError(f"Greenhouse {res.status_code}: {res.text}")
-
-            elif platform == "lever":
-                job_id = _lever_id(job["job_url"])
-                if not job_id:
-                    raise ValueError("Could not extract Lever job ID")
-
-                res = await client.post(
-                    f"https://api.lever.co/v0/postings/{job_id}/apply",
-                    json={
-                        "name": profile.get("full_name"),
-                        "email": profile.get("email"),
-                        "phone": profile.get("phone"),
-                        "location": profile.get("location"),
-                        "urls": {
-                            "linkedin": profile.get("linkedin") or "",
-                            "github": profile.get("github") or "",
-                            "portfolio": profile.get("portfolio") or "",
-                        },
-                        "resume": resume_url,
-                        "comments": job.get("cover_letter_notes") or "",
-                    },
-                )
-
-                if res.status_code in (200, 201):
-                    state["result"] = {"success": True, "platform": "lever", "path": 1}
-                else:
-                    raise ValueError(f"Lever {res.status_code}: {res.text}")
-
-            elif platform == "ashby":
-                job_id = _ashby_id(job["job_url"])
-                if not job_id:
-                    raise ValueError("Could not extract Ashby job ID")
-
-                res = await client.post(
-                    "https://api.ashbyhq.com/applicationForm.submit",
-                    json={
-                        "jobPostingId": job_id,
-                        "applicationForm": {
-                            "_systemfield_name": profile.get("full_name"),
-                            "_systemfield_email": profile.get("email"),
-                            "_systemfield_phone": profile.get("phone"),
-                            "_systemfield_resume_url": resume_url,
-                            "_systemfield_linkedin_url": profile.get("linkedin") or "",
-                            "_systemfield_website_url": profile.get("portfolio") or "",
-                        },
-                    },
-                )
-                data = res.json()
-                if data.get("success"):
-                    state["result"] = {"success": True, "platform": "ashby", "path": 1}
-                else:
-                    raise ValueError(f"Ashby error: {data}")
-
-    except Exception as e:
-        print(f"[apply:path1] error — falling back to Skyvern: {e}")
-        state["result"] = {"success": False, "reason": str(e)}
-
-    return state
-
-def path1_router(state: ApplyState) -> str:
-    result = state.get("result") or {}
-    if result.get("success"):
-        return "update_status"
-    # TEMPORARY: don't fall to Skyvern
-    return "error"
-
-async def skyvern_fallback(state: ApplyState) -> ApplyState:
-    job = state["job"]
-    profile = state["profile"]
-    resume_url = state.get("resume_pdf_url") or ""
-
-    skyvern_api_key = os.getenv("SKYVERN_API_KEY")
-    supabase_url = os.getenv("SUPABASE_URL")
-    scout_secret = os.getenv("SCOUT_SECRET")
-
-    if not skyvern_api_key:
-        state["result"] = {"success": False, "error": "SKYVERN_API_KEY not configured", "code": "CONFIG_ERROR"}
-        return state
-
-    resume_json = job.get("resume_notes")
-    if isinstance(resume_json, str):
-        try: resume_json = json.loads(resume_json)
-        except: resume_json = {}
-
-    navigation_goal = f"""
-You are applying for the role of "{job.get('role')}" at "{job.get('company')}" on behalf of {profile.get('full_name')}.
-
-APPLICANT DETAILS:
-- Full Name: {profile.get('full_name')}
-- Email: {profile.get('email')}
-- Phone: {profile.get('phone')}
-- Location: {profile.get('location')}
-- LinkedIn: {profile.get('linkedin') or ''}
-- GitHub: {profile.get('github') or ''}
-- Portfolio: {profile.get('portfolio') or ''}
-- Years of Experience: {profile.get('years_experience') or ''}
-- Work Authorization: Remote contractor available worldwide
-
-COVER LETTER:
-{job.get('cover_letter_notes') or ''}
-
-RESUME SUMMARY:
-{resume_json.get('summary') if isinstance(resume_json, dict) else ''}
-
-SKILLS:
-{', '.join(resume_json.get('skills', [])) if isinstance(resume_json, dict) else ''}
-
-INSTRUCTIONS:
-1. Fill all required form fields using the applicant details above
-2. If asked for a cover letter, paste the cover letter above
-3. If asked to upload a resume, upload from: {resume_url or 'not provided — skip this field'}
-4. If you hit a required field you cannot answer, STOP and use needs_help status with the exact question
-5. Do NOT fill salary unless required — if required, use "Negotiable"
-6. Do NOT create accounts unless necessary — use {profile.get('email')} if needed
-7. Submit the application when all fields are filled
-8. Return the confirmation URL or message after submission
-"""
-
-    try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            res = await client.post(
-                "https://api.skyvern.com/api/v1/tasks",
-                headers={
-                    "Content-Type": "application/json",
-                    "x-api-key": skyvern_api_key,
-                },
-                json={
-                    "url": job["job_url"],
-                    "webhook_callback_url": f"{supabase_url}/functions/v1/skyvern-webhook?secret={scout_secret}",
-                    "navigation_goal": navigation_goal,
-                    "data_extraction_goal": "Extract the application confirmation number or message after successful submission.",
-                    "proxy_location": "NONE",
-                    "max_steps_override": 50,
-                },
-            )
-
-            data = res.json()
-            task_id = data.get("task_id")
-
-            if not task_id:
-                raise ValueError(f"Skyvern error: {data}")
-
-            await asyncio.to_thread(
-                lambda: supabase.from_("user_jobs").update({
-                    "skyvern_task_id": task_id,
-                    "skyvern_status": "running",
-                }).eq("job_id", state["job_id"]).eq("user_id", state["user_id"]).execute()
-            )
-
-            state["used_fallback"] = True
-            state["result"] = {
-                "success": True,
-                "path": 2,
-                "platform": "skyvern",
-                "async": True,
-                "task_id": task_id,
-                "message": "Application is being processed. We'll notify you when it's done.",
-            }
-            print(f"[apply:skyvern_fallback] task launched: {task_id}")
-
-    except Exception as e:
-        print(f"[apply:skyvern_fallback] error: {e}")
-        state["result"] = {"success": False, "error": str(e), "code": "SKYVERN_ERROR"}
-
-    return state
-
-async def apply_update_status(state: ApplyState) -> ApplyState:
-    result = state.get("result") or {}
-    if not result.get("success"):
-        return state
-
-    try:
-        if result.get("path") == 1:
-            await asyncio.to_thread(
-                lambda: supabase.from_("user_jobs").update({
-                    "status": "applied",
-                    "applied_at": datetime.datetime.utcnow().isoformat(),
-                    "application_platform": result.get("platform"),
-                }).eq("job_id", state["job_id"]).eq("user_id", state["user_id"]).execute()
-            )
-        elif result.get("path") == 2:
-            await asyncio.to_thread(
-                lambda: supabase.from_("user_jobs").update({
-                    "status": "applying",
-                    "applied_at": datetime.datetime.utcnow().isoformat(),
-                    "application_platform": "skyvern",
-                }).eq("job_id", state["job_id"]).eq("user_id", state["user_id"]).execute()
-            )
-        print(f"[apply:update_status] job {state['job_id']} → path={result.get('path')}")
-    except Exception as e:
-        print(f"[apply:update_status] error: {e}")
-
-    return state
-
-async def apply_error_handler(state: ApplyState) -> ApplyState:
-    print(f"[apply:error] {state.get('result')}")
-    return state
-
-def build_apply_graph():
-    graph = StateGraph(ApplyState)
-    graph.add_node("apply_fetch", apply_fetch)
-    graph.add_node("apply_detect_platform", apply_detect_platform)
-    graph.add_node("apply_path1", apply_path1)
-    graph.add_node("skyvern_fallback", skyvern_fallback)
-    graph.add_node("apply_update_status", apply_update_status)
-    graph.add_node("apply_error_handler", apply_error_handler)
-
-    graph.set_entry_point("apply_fetch")
-    graph.add_edge("apply_fetch", "apply_detect_platform")
-
-    graph.add_conditional_edges(
-        "apply_detect_platform",
-        apply_router,
-        {
-            "path1": "apply_path1",
-            "skyvern_fallback": "skyvern_fallback",
-            "error": "apply_error_handler",
-        }
-    )
-
-    graph.add_conditional_edges(
-        "apply_path1",
-        path1_router,
-        {
-            "update_status": "apply_update_status",
-            "skyvern_fallback": "skyvern_fallback",
-            "error": "apply_error_handler",
-        }
-    )
-
-    graph.add_edge("skyvern_fallback", "apply_update_status")
-    graph.add_edge("apply_update_status", END)
-    graph.add_edge("apply_error_handler", END)
-
-    return graph.compile()
-
-apply_graph = build_apply_graph()
 
 @app.post("/apply")
 async def apply(req: ApplyRequest):
     if not req.job_id or not req.user_id:
         raise HTTPException(status_code=400, detail="job_id and user_id required")
 
-    initial_state: ApplyState = {
-        "job_id": req.job_id,
-        "user_id": req.user_id,
-        "resume_pdf_url": req.resume_pdf_url,
-        "job": None,
-        "profile": None,
-        "platform": None,
-        "path": None,
-        "missing_fields": None,
-        "used_fallback": False,
-        "result": None,
-    }
+    def _check_profile():
+        return supabase.from_("profiles") \
+            .select("full_name, email, phone, location") \
+            .eq("user_id", req.user_id).single().execute()
+
+    def _check_docs():
+        return supabase.from_("user_jobs") \
+            .select("resume_notes, cover_letter_notes") \
+            .eq("job_id", req.job_id) \
+            .eq("user_id", req.user_id).single().execute()
+
+    profile_res, docs_res = await asyncio.gather(
+        asyncio.to_thread(_check_profile),
+        asyncio.to_thread(_check_docs),
+    )
+
+    profile = profile_res.data or {}
+    missing = [
+        f for f, v in {
+            "full name": profile.get("full_name"),
+            "email": profile.get("email"),
+            "phone": profile.get("phone"),
+            "location": profile.get("location"),
+        }.items() if not v
+    ]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Profile missing: {', '.join(missing)}. Update your profile before applying."
+        )
+
+    docs = docs_res.data or {}
+    if not docs.get("resume_notes") or not docs.get("cover_letter_notes"):
+        raise HTTPException(
+            status_code=400,
+            detail="Generate your tailored resume and cover letter before applying."
+        )
 
     try:
-        final_state = await apply_graph.ainvoke(initial_state)
-        result = final_state.get("result") or {}
-
-        if result.get("code") in ("JOB_NOT_FOUND", "PROFILE_NOT_FOUND"):
-            raise HTTPException(status_code=404, detail=result["error"])
-
-        if result.get("code") in ("INCOMPLETE_PROFILE", "DOCS_NOT_GENERATED"):
-            raise HTTPException(status_code=400, detail=result["error"])
-
-        return result
-
-    except HTTPException:
-        raise
+        _modal_apply.spawn(
+            job_id=req.job_id,
+            user_id=req.user_id,
+            resume_pdf_url=req.resume_pdf_url or "",
+        )
     except Exception as e:
-        print(f"[/apply] error: {e}")
-        await log_event("error", f"/apply failed: {str(e)}", "apply_endpoint")
-        raise HTTPException(status_code=500, detail=str(e))
+        await log_event("error", f"/apply Modal spawn failed: {str(e)}", "apply_endpoint")
+        raise HTTPException(status_code=500, detail=f"Failed to start application worker: {str(e)}")
+
+    return {
+        "success": True,
+        "status": "running",
+        "message": "Application started. We will notify you when it is done or if we need your input.",
+    }
+
+
+@app.post("/apply/resume")
+async def resume_apply(req: ResumeRequest):
+    if not req.job_id or not req.user_id or not req.user_answer:
+        raise HTTPException(status_code=400, detail="job_id, user_id and user_answer required")
+
+    def _check_state():
+        return supabase.from_("user_jobs") \
+            .select("skyvern_status, browser_state_json") \
+            .eq("job_id", req.job_id) \
+            .eq("user_id", req.user_id).single().execute()
+
+    state_res = await asyncio.to_thread(_check_state)
+    state_data = state_res.data or {}
+
+    if state_data.get("skyvern_status") != "awaiting_input":
+        raise HTTPException(status_code=400, detail="No paused application found for this job.")
+
+    if not state_data.get("browser_state_json"):
+        raise HTTPException(
+            status_code=400,
+            detail="Browser state not found - cannot resume. Please try applying again."
+        )
+
+    try:
+        _modal_resume.spawn(
+            job_id=req.job_id,
+            user_id=req.user_id,
+            user_answer=req.user_answer,
+        )
+    except Exception as e:
+        await log_event("error", f"/apply/resume Modal spawn failed: {str(e)}", "resume_endpoint")
+        raise HTTPException(status_code=500, detail=f"Failed to resume application: {str(e)}")
+
+    return {
+        "success": True,
+        "status": "resuming",
+        "message": "Resuming your application. We will notify you when it is done.",
+    }
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
